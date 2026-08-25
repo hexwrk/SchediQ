@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+
+  subjects     Subject[]
+  tasks        Task[]
+  preferences  Preference?
+}
+
+// cognitive_category drives the clustering penalty in the scheduler (Sprint 3).
+// color_tag is display-only, never read by scheduling logic.
+model Subject {
+  id                String   @id @default(uuid())
+  name              String
+  cognitiveCategory String
+  colorTag          String   @default("#6366f1")
+  createdAt         DateTime @default(now())
+
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tasks    Task[]
+
+  @@unique([userId, name])
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum TaskStatus {
+  PENDING
+  SCHEDULED
+  DONE
+}
+
+model Task {
+  id          String       @id @default(uuid())
+  title       String
+  deadline    DateTime
+  durationMin Int
+  priority    TaskPriority @default(MEDIUM)
+  status      TaskStatus   @default(PENDING)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+
+  sessions  StudySession[]
+}
+
+// Derived by the scheduling engine (Sprint 3); the calendar view renders from these, not from Tasks directly.
+model StudySession {
+  id        String   @id @default(uuid())
+  startsAt  DateTime
+  endsAt    DateTime
+  createdAt DateTime @default(now())
+
+  taskId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model Preference {
+  id               String @id @default(uuid())
+  maxDailyMins     Int    @default(180)
+  preferredStart   String @default("09:00")
+  preferredEnd     String @default("21:00")
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
