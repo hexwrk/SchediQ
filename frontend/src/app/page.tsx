@@ -1,54 +1,47 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
 
 export default function Home() {
-  const { user, loading, logout } = useAuth();
+  const { user, loading } = useAuth();
+  const router = useRouter();
+
+  // Authenticated users go straight to their dashboard.
+  useEffect(() => {
+    if (!loading && user) {
+      router.replace("/dashboard");
+    }
+  }, [loading, user, router]);
+
+  if (loading || user) return null;
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-zinc-50 px-6 text-center dark:bg-black">
-      <h1 className="text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-        SchediQ
-      </h1>
-      <p className="max-w-md text-zinc-600 dark:text-zinc-400">
-        Turn your free-text workload into a daily-limit-aware study schedule.
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-bg px-6 text-center">
+      <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-base font-bold text-white">
+        SQ
+      </span>
+      <h1 className="text-3xl font-semibold tracking-tight">SchediQ</h1>
+      <p className="max-w-md text-text-muted">
+        Turn your free-text workload into a daily-limit-aware study schedule that
+        clusters similar subjects to cut task-switching cost.
       </p>
-
-      {loading ? null : user ? (
-        <div className="flex flex-col items-center gap-3">
-          <p className="text-sm text-zinc-500">Signed in as {user.email}</p>
-          <div className="flex gap-3">
-            <Link
-              href="/tasks"
-              className="rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background"
-            >
-              Go to tasks
-            </Link>
-            <button
-              onClick={logout}
-              className="rounded-full border border-black/10 px-5 py-2.5 text-sm font-medium dark:border-white/15"
-            >
-              Log out
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex gap-3">
-          <Link
-            href="/login"
-            className="rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background"
-          >
-            Log in
-          </Link>
-          <Link
-            href="/register"
-            className="rounded-full border border-black/10 px-5 py-2.5 text-sm font-medium dark:border-white/15"
-          >
-            Sign up
-          </Link>
-        </div>
-      )}
+      <div className="flex gap-3">
+        <Link
+          href="/login"
+          className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-white hover:opacity-90"
+        >
+          Log in
+        </Link>
+        <Link
+          href="/register"
+          className="rounded-lg border border-border bg-surface px-5 py-2.5 text-sm font-medium hover:bg-bg"
+        >
+          Sign up
+        </Link>
+      </div>
     </div>
   );
 }

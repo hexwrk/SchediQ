@@ -20,7 +20,7 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(email, password);
-      router.push("/tasks");
+      router.push("/dashboard");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong");
     } finally {
@@ -29,9 +29,17 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex flex-1 items-center justify-center px-6">
-      <form onSubmit={onSubmit} className="w-full max-w-sm flex flex-col gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Log in</h1>
+    <div className="flex min-h-screen items-center justify-center bg-bg px-6">
+      <form
+        onSubmit={onSubmit}
+        className="flex w-full max-w-sm flex-col gap-4 rounded-card border border-border bg-surface p-7"
+      >
+        <div className="flex items-center gap-2">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">
+            SQ
+          </span>
+          <h1 className="text-xl font-semibold tracking-tight">Log in</h1>
+        </div>
 
         <label className="flex flex-col gap-1 text-sm">
           Email
@@ -40,7 +48,7 @@ export default function LoginPage() {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="rounded-md border border-black/10 px-3 py-2 dark:border-white/15"
+            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
           />
         </label>
 
@@ -51,7 +59,7 @@ export default function LoginPage() {
             required
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="rounded-md border border-black/10 px-3 py-2 dark:border-white/15"
+            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
           />
         </label>
 
@@ -60,14 +68,14 @@ export default function LoginPage() {
         <button
           type="submit"
           disabled={submitting}
-          className="rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background disabled:opacity-50"
+          className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
           {submitting ? "Logging in..." : "Log in"}
         </button>
 
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm text-text-muted">
           No account?{" "}
-          <Link href="/register" className="underline">
+          <Link href="/register" className="text-primary hover:underline">
             Sign up
           </Link>
         </p>

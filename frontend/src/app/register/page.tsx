@@ -21,7 +21,7 @@ export default function RegisterPage() {
     setSubmitting(true);
     try {
       await register(email, password, name || undefined);
-      router.push("/tasks");
+      router.push("/dashboard");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong");
     } finally {
@@ -30,9 +30,17 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="flex flex-1 items-center justify-center px-6">
-      <form onSubmit={onSubmit} className="w-full max-w-sm flex flex-col gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Sign up</h1>
+    <div className="flex min-h-screen items-center justify-center bg-bg px-6">
+      <form
+        onSubmit={onSubmit}
+        className="flex w-full max-w-sm flex-col gap-4 rounded-card border border-border bg-surface p-7"
+      >
+        <div className="flex items-center gap-2">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">
+            SQ
+          </span>
+          <h1 className="text-xl font-semibold tracking-tight">Sign up</h1>
+        </div>
 
         <label className="flex flex-col gap-1 text-sm">
           Name (optional)
@@ -40,7 +48,7 @@ export default function RegisterPage() {
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="rounded-md border border-black/10 px-3 py-2 dark:border-white/15"
+            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
           />
         </label>
 
@@ -51,7 +59,7 @@ export default function RegisterPage() {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="rounded-md border border-black/10 px-3 py-2 dark:border-white/15"
+            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
           />
         </label>
 
@@ -63,7 +71,7 @@ export default function RegisterPage() {
             minLength={8}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="rounded-md border border-black/10 px-3 py-2 dark:border-white/15"
+            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
           />
         </label>
 
@@ -72,14 +80,14 @@ export default function RegisterPage() {
         <button
           type="submit"
           disabled={submitting}
-          className="rounded-full bg-foreground px-5 py-2.5 text-sm font-medium text-background disabled:opacity-50"
+          className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
         >
           {submitting ? "Creating account..." : "Sign up"}
         </button>
 
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm text-text-muted">
           Already have an account?{" "}
-          <Link href="/login" className="underline">
+          <Link href="/login" className="text-primary hover:underline">
             Log in
           </Link>
         </p>

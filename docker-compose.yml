@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: schediq-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: schediq
+      POSTGRES_USER: schediq
+      POSTGRES_PASSWORD: schediq
+    ports:
+      - "5432:5432"
+    volumes:
+      - schediq_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U schediq -d schediq"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  schediq_pgdata:

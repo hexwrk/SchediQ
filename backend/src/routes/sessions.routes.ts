@@ -1,10 +1,11 @@
 import { Router } from "express";
+import { generateSchedule, listSessions } from "../controllers/sessions.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 
 const router = Router();
 router.use(requireAuth);
 
-// Study sessions are derived by the scheduling engine — built in Sprint 3.
-router.get("/", (_req, res) => res.json({ sessions: [] }));
+router.get("/", listSessions);
+router.post("/generate", generateSchedule);
 
 export default router;
