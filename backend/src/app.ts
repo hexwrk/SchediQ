@@ -1,11 +1,13 @@
 import cors from "cors";
 import express from "express";
+import aiRoutes from "./routes/ai.routes";
 import authRoutes from "./routes/auth.routes";
 import preferencesRoutes from "./routes/preferences.routes";
 import sessionsRoutes from "./routes/sessions.routes";
 import subjectsRoutes from "./routes/subjects.routes";
 import tasksRoutes from "./routes/tasks.routes";
 import { errorHandler } from "./middleware/error.middleware";
+import { requireAuth } from "./middleware/auth.middleware";
 
 export function createApp() {
   const app = express();
@@ -20,6 +22,8 @@ export function createApp() {
   app.use("/api/tasks", tasksRoutes);
   app.use("/api/sessions", sessionsRoutes);
   app.use("/api/preferences", preferencesRoutes);
+  // requireAuth is mounted before the router so the parse route is token-gated.
+  app.use("/api/ai", requireAuth, aiRoutes);
 
   app.use(errorHandler);
 

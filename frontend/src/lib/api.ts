@@ -104,12 +104,98 @@ export const tasksApi = {
     request<void>(`/api/tasks/${id}`, { method: "DELETE", token }),
 };
 
+export type CognitiveCategory = "Analytical" | "Verbal" | "Technical" | "General";
+
+export interface SubjectInput {
+  name: string;
+  cognitiveCategory: string;
+  colorTag?: string;
+}
+
 export const subjectsApi = {
   list: (token: string) => request<{ subjects: Subject[] }>("/api/subjects", { token }),
-  create: (token: string, data: { name: string; cognitiveCategory: string; colorTag?: string }) =>
+  create: (token: string, data: SubjectInput) =>
     request<{ subject: Subject }>("/api/subjects", {
       method: "POST",
       body: JSON.stringify(data),
+      token,
+    }),
+  update: (token: string, id: string, data: Partial<SubjectInput>) =>
+    request<{ subject: Subject }>(`/api/subjects/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+      token,
+    }),
+  remove: (token: string, id: string) =>
+    request<void>(`/api/subjects/${id}`, { method: "DELETE", token }),
+};
+
+export interface Preference {
+  id: string;
+  maxDailyMins: number;
+  preferredStart: string;
+  preferredEnd: string;
+  breakMins: number;
+  clustering: boolean;
+}
+
+export interface PreferenceInput {
+  maxDailyMins?: number;
+  preferredStart?: string;
+  preferredEnd?: string;
+  breakMins?: number;
+  clustering?: boolean;
+}
+
+export const preferencesApi = {
+  get: (token: string) =>
+    request<{ preferences: Preference }>("/api/preferences", { token }),
+  update: (token: string, data: PreferenceInput) =>
+    request<{ preferences: Preference }>("/api/preferences", {
+      method: "PUT",
+      body: JSON.stringify(data),
+      token,
+    }),
+};
+
+// A StudySession as returned by the API, with its task and that task's subject
+// embedded so the calendar can render and colour blocks without extra fetches.
+export interface StudySession {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  taskId: string;
+  task: Task;
+}
+
+export const sessionsApi = {
+  list: (token: string) =>
+    request<{ sessions: StudySession[] }>("/api/sessions", { token }),
+  generate: (token: string) =>
+    request<{ sessions: StudySession[] }>("/api/sessions/generate", {
+      method: "POST",
+      token,
+    }),
+};
+
+// Structured output of the AI/rule parser. source tells the UI which path ran.
+export interface ParsedTask {
+  title: string;
+  subjectId: string | null;
+  subjectName: string;
+  cognitiveCategory: CognitiveCategory | null;
+  deadline: string | null;
+  durationMin: number;
+  priority: TaskPriority;
+  isNewSubject: boolean;
+  source: "rule" | "openai" | "fallback";
+}
+
+export const aiApi = {
+  parse: (token: string, text: string) =>
+    request<ParsedTask>("/api/ai/parse", {
+      method: "POST",
+      body: JSON.stringify({ text }),
       token,
     }),
 };

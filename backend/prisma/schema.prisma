@@ -83,6 +83,8 @@ model Preference {
   maxDailyMins     Int    @default(180)
   preferredStart   String @default("09:00")
   preferredEnd     String @default("21:00")
+  breakMins        Int    @default(10)
+  clustering       Boolean @default(true)
 
   userId String @unique
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)

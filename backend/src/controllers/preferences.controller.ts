@@ -6,6 +6,8 @@ const preferencesSchema = z.object({
   maxDailyMins: z.number().int().positive().optional(),
   preferredStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   preferredEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  breakMins: z.number().int().nonnegative().optional(),
+  clustering: z.boolean().optional(),
 });
 
 export async function getPreferences(req: Request, res: Response) {
