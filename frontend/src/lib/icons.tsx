@@ -91,6 +91,23 @@ export function LogoutIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function TrophyIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4z" />
+      <path d="M7 6H4v1a3 3 0 0 0 3 3M17 6h3v1a3 3 0 0 1-3 3" />
+    </svg>
+  );
+}
+
+export function FlameIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M12 2s4 4 4 8a4 4 0 0 1-8 0c0-1 .5-2 1-2.5C9 9 8 7 8 7s-2 2-2 6a6 6 0 0 0 12 0c0-5-6-11-6-11z" />
+    </svg>
+  );
+}
+
 export function SparkIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>

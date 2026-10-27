@@ -7,9 +7,9 @@ import {
   StudySession,
   preferencesApi,
   sessionsApi,
-  tasksApi,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useProgress } from "@/lib/progress-context";
 import { RefreshIcon } from "@/lib/icons";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -33,11 +33,14 @@ function hhmm(iso: string): string {
 
 export default function DashboardPage() {
   const { token } = useAuth();
+  const { progress, refresh: refreshProgress, celebrate } = useProgress();
   const [sessions, setSessions] = useState<StudySession[]>([]);
   const [prefs, setPrefs] = useState<Preference | null>(null);
   const [loading, setLoading] = useState(true);
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Transient "+N XP" float anchored to the last-clicked block.
+  const [xpFloat, setXpFloat] = useState<{ id: number; amount: number } | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -73,16 +76,39 @@ export default function DashboardPage() {
     }
   }
 
-  // Toggle the clicked block's task between DONE and PENDING, then reload so the
-  // KPIs and styling stay consistent.
-  async function toggleTask(s: StudySession) {
+  // Toggle the clicked study block complete/incomplete. Completion lives on the
+  // session; afterwards we reload sessions and refresh the derived progress,
+  // then surface a +XP float and celebrate any level-up or newly unlocked badge.
+  async function toggleBlock(s: StudySession) {
     if (!token) return;
-    const next = s.task.status === "DONE" ? "PENDING" : "DONE";
+    const markComplete = s.completedAt === null;
+    // Snapshot progress before so we can diff XP / level / badges.
+    const before = progress;
     try {
-      await tasksApi.update(token, s.taskId, { status: next });
+      await sessionsApi.toggle(token, s.id, markComplete);
       await load();
+      const after = await refreshProgress();
+
+      if (markComplete && before && after) {
+        const gained = after.xp - before.xp;
+        if (gained > 0) {
+          const id = Date.now();
+          setXpFloat({ id, amount: gained });
+          setTimeout(() => setXpFloat((f) => (f && f.id === id ? null : f)), 1500);
+        }
+        if (after.level > before.level) {
+          celebrate(`Level ${after.level}!`, "You leveled up. Keep the streak going.");
+        }
+        const newBadges = after.badges.filter(
+          (b) => b.unlocked && !before.badges.find((x) => x.key === b.key)?.unlocked
+        );
+        // Fire one celebration per newly unlocked badge.
+        for (const b of newBadges) {
+          celebrate(`Badge unlocked: ${b.label}`, b.description);
+        }
+      }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to update task");
+      setError(err instanceof ApiError ? err.message : "Failed to update session");
     }
   }
 
@@ -109,10 +135,10 @@ export default function DashboardPage() {
     .filter((s) => new Date(s.startsAt).getTime() < windowEnd)
     .reduce((acc, s) => acc + minutesOf(s), 0);
   const completedMins = sessions
-    .filter((s) => s.task.status === "DONE")
+    .filter((s) => s.completedAt !== null)
     .reduce((acc, s) => acc + minutesOf(s), 0);
   const activeTasks = new Set(
-    sessions.filter((s) => s.task.status !== "DONE").map((s) => s.taskId)
+    sessions.filter((s) => s.completedAt === null).map((s) => s.taskId)
   ).size;
   const totalForTrack = completedMins + scheduledMins;
   const onTrack = totalForTrack > 0 ? Math.round((completedMins / totalForTrack) * 100) : 0;
@@ -124,7 +150,17 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="relative flex flex-col gap-6">
+      {/* +N XP float on completing a block */}
+      {xpFloat && (
+        <div
+          key={xpFloat.id}
+          className="pointer-events-none fixed left-1/2 top-24 z-50 -translate-x-1/2 animate-bounce rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-white shadow-lg"
+        >
+          +{xpFloat.amount} XP
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <p className="text-sm text-text-muted">Your study week at a glance.</p>
         <button
@@ -194,12 +230,12 @@ export default function DashboardPage() {
                 ) : (
                   list.map((s) => {
                     const color = s.task.subject?.colorTag ?? "#6366f1";
-                    const done = s.task.status === "DONE";
+                    const done = s.completedAt !== null;
                     return (
                       <button
                         key={s.id}
-                        onClick={() => toggleTask(s)}
-                        title={`${s.task.title} — click to toggle done`}
+                        onClick={() => toggleBlock(s)}
+                        title={`${s.task.title} — click to toggle complete`}
                         className="rounded-md border-l-4 px-2 py-1 text-left text-xs transition-colors hover:brightness-95"
                         style={{
                           borderColor: color,

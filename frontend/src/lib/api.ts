@@ -164,6 +164,7 @@ export interface StudySession {
   id: string;
   startsAt: string;
   endsAt: string;
+  completedAt: string | null;
   taskId: string;
   task: Task;
 }
@@ -174,6 +175,12 @@ export const sessionsApi = {
   generate: (token: string) =>
     request<{ sessions: StudySession[] }>("/api/sessions/generate", {
       method: "POST",
+      token,
+    }),
+  toggle: (token: string, id: string, completed: boolean) =>
+    request<{ session: StudySession }>(`/api/sessions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ completed }),
       token,
     }),
 };
@@ -198,4 +205,44 @@ export const aiApi = {
       body: JSON.stringify({ text }),
       token,
     }),
+};
+
+// Gamification. All fields are DERIVED server-side from completed sessions.
+export interface LevelProgress {
+  level: number;
+  intoLevel: number;
+  toNext: number;
+  span: number;
+}
+
+export interface Badge {
+  key: string;
+  label: string;
+  description: string;
+  unlocked: boolean;
+}
+
+export interface LeaderboardEntry {
+  id: string;
+  name: string;
+  xp: number;
+  level: number;
+  rank: number;
+  isCurrentUser: boolean;
+  isDemo: boolean;
+}
+
+export interface Progress {
+  xp: number;
+  level: number;
+  levelProgress: LevelProgress;
+  streak: number;
+  badges: Badge[];
+  leaderboard: LeaderboardEntry[];
+  rank: number | null;
+  totalUsers: number;
+}
+
+export const progressApi = {
+  get: (token: string) => request<Progress>("/api/progress", { token }),
 };

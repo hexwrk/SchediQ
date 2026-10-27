@@ -3,6 +3,7 @@ import express from "express";
 import aiRoutes from "./routes/ai.routes";
 import authRoutes from "./routes/auth.routes";
 import preferencesRoutes from "./routes/preferences.routes";
+import progressRoutes from "./routes/progress.routes";
 import sessionsRoutes from "./routes/sessions.routes";
 import subjectsRoutes from "./routes/subjects.routes";
 import tasksRoutes from "./routes/tasks.routes";
@@ -22,6 +23,7 @@ export function createApp() {
   app.use("/api/tasks", tasksRoutes);
   app.use("/api/sessions", sessionsRoutes);
   app.use("/api/preferences", preferencesRoutes);
+  app.use("/api/progress", progressRoutes);
   // requireAuth is mounted before the router so the parse route is token-gated.
   app.use("/api/ai", requireAuth, aiRoutes);
 

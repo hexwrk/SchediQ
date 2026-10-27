@@ -72,6 +72,9 @@ model StudySession {
   id        String   @id @default(uuid())
   startsAt  DateTime
   endsAt    DateTime
+  // Completion lives on the session (Sprint 3 gamification). Null = not done.
+  // XP/streak derive from these timestamps; task.status is kept roughly in sync.
+  completedAt DateTime?
   createdAt DateTime @default(now())
 
   taskId String
