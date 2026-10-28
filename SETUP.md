@@ -28,7 +28,14 @@ npm run dev                     # API on http://localhost:4000
 Migrations, in order: `init`, `scheduling_prefs`, `session_completion`,
 `roles_tiers` (role + account tier, AI parse log, backup log),
 `require_user_name` (backfills null names from the email local part, then sets
-NOT NULL), `courses_lessons` (Course, Lesson, Course.subjectId, Task.lessonId).
+NOT NULL), `courses_lessons` (Course, Lesson, Course.subjectId, Task.lessonId),
+`password_reset` (hashed, single-use reset tokens).
+
+Tests (Node's built-in runner, no extra framework):
+
+```bash
+cd backend && npm test          # scheduler, mastery, shared validators, rule parser
+```
 
 Health check: `curl localhost:4000/api/health` returns `{"status":"ok"}`.
 
@@ -43,6 +50,8 @@ CORS_ORIGIN="http://localhost:3000"
 AI_PARSER=rule
 OPENAI_API_KEY=""
 BACKUP_MODE=auto
+APP_URL="http://localhost:3000"
+RESET_DEMO_MODE=true
 ```
 
 `npm run build` compiles to `dist/backend/src/index.js` (the backend's
@@ -261,11 +270,75 @@ The model is `gpt-4o-mini` (the `MODEL` constant in `ai.controller.ts` and
 `courses.controller.ts`). Both prompts treat user text strictly as data (a
 prompt-injection guard). On any failure, both fall back to the offline path.
 
+## 13. Scheduler robustness
+
+The scheduler (`backend/src/lib/scheduler.ts`) is pure and deterministic, and
+covered by `backend/test/scheduler.test.ts`:
+
+| Situation | Behaviour |
+| --- | --- |
+| Deadline already passed | Placed as soon as possible from now (never in the past), flagged **Overdue** |
+| Task longer than the daily limit | Split across as many days as needed |
+| Cannot finish before its deadline | Kept and placed in full, flagged **At risk** with the date its last block ends |
+| Does not fit at all (zero window/limit, or past the horizon) | Not dropped: flagged **Not scheduled** with the reason and the setting to change |
+| No tasks | Empty schedule, the dashboard explains what to do next |
+| No saved preferences | Defaults (180 min/day, 09:00-21:00, 10 min breaks, clustering on) |
+| Very many tasks | Planning horizon of 60 days bounds the work; 2,000 tasks schedule in well under 2 s |
+
+`GET /api/sessions` and `POST /api/sessions/generate` return `{ sessions,
+issues }`. The issues are re-derived from the stored rows on every load, so the
+dashboard's **Needs attention** panel stays accurate as time passes. The seed
+includes one overdue task so the panel is visible in the demo.
+
+## 14. One progress system (lessons <-> tasks)
+
+"Add this course to my schedule" creates one task per lesson (`Task.lessonId`).
+The link works in both directions:
+
+- Finishing every study block of a lesson's task, or ticking it done in the
+  Task list, completes the lesson (lesson XP, course progress, mastery).
+- Completing the lesson (button or passing its quiz) marks its task DONE.
+
+Deleting a course deletes its lessons. Its tasks are kept and just unlinked.
+
+## 15. Accounts: password reset and deletion
+
+- **Forgot password** (link on the login page): `POST /api/auth/forgot` creates a
+  30-minute, single-use token (stored as a SHA-256 hash), then
+  `/reset-password?token=...` sets a new password via `POST /api/auth/reset`.
+  **Demo mode:** there is no email service, so the reset link is shown on screen
+  and printed in the API console (`[demo mail] ...`). Set `RESET_DEMO_MODE=false`
+  to stop returning it in the response.
+- **Delete account** (Account page): requires the current password and typing
+  DELETE. Cascades to everything the user owns. The only remaining super admin
+  cannot delete themselves.
+
+## 16. Phone, tablet and installable app (PWA)
+
+- Below 1024 px the sidebar becomes a drawer behind a menu button. Tables,
+  report tables and the weekly calendar scroll sideways instead of overflowing.
+- `src/app/manifest.ts` (served at `/manifest.webmanifest`) plus icons in
+  `public/` make SchediQ installable. In Chrome or Edge use the install icon in
+  the address bar (desktop) or "Add to Home screen" (Android). On iOS Safari, use
+  Share then "Add to Home Screen". There is no service worker, so it is
+  installable but not usable offline (the data lives on the API anyway).
+
+## 17. Empty, loading and error states
+
+Every data page loads through one hook (`src/lib/use-api.ts`) and renders one
+of: a loading skeleton, a friendly error with **Try again**, an empty state that
+explains the page and links to the next action, or the data. A new account
+sees a 3-step onboarding checklist on the dashboard. Unexpected render errors
+are caught by `src/app/(app)/error.tsx` (and `global-error.tsx` for the root),
+and unknown URLs get a friendly 404.
+
+See `docs/UAT.md` for the user acceptance test checklist.
+
 ## Production build check
 
 ```bash
-cd backend && npx tsc --noEmit
-cd frontend && npm run build    # the real test of Next 16 correctness
+cd backend && npx tsc --noEmit && npm test
+cd frontend && npm run lint && npm run build    # build is the real test of Next 16 correctness
 ```
 
 See `SECURITY.md` for the security model.

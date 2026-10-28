@@ -115,6 +115,18 @@ export const authApi = {
       body: JSON.stringify({ email, password }),
     }),
   me: (token: string) => request<{ user: AuthUser }>("/api/auth/me", { token }),
+  // Always resolves with the same generic message (no account enumeration).
+  // In demo mode the response also carries the reset link, since no email is sent.
+  forgot: (email: string) =>
+    request<{ message: string; demo?: boolean; resetUrl?: string; expiresInMinutes?: number }>("/api/auth/forgot", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  reset: (token: string, password: string) =>
+    request<{ message: string }>("/api/auth/reset", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
+    }),
 };
 
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH";
@@ -129,6 +141,7 @@ export interface Subject {
 
 export interface Task {
   id: string;
+  lessonId?: string | null;
   title: string;
   deadline: string;
   durationMin: number;
@@ -225,11 +238,25 @@ export interface StudySession {
   task: Task;
 }
 
+// A task the scheduler could not place cleanly, with the reason to show.
+export interface ScheduleIssue {
+  taskId: string;
+  title: string;
+  kind: "OVERDUE" | "AT_RISK" | "UNSCHEDULED";
+  reason: string;
+  unplacedMin: number;
+  deadline: string;
+}
+
+export interface ScheduleResponse {
+  sessions: StudySession[];
+  issues: ScheduleIssue[];
+}
+
 export const sessionsApi = {
-  list: (token: string) =>
-    request<{ sessions: StudySession[] }>("/api/sessions", { token }),
+  list: (token: string) => request<ScheduleResponse>("/api/sessions", { token }),
   generate: (token: string) =>
-    request<{ sessions: StudySession[] }>("/api/sessions/generate", {
+    request<ScheduleResponse>("/api/sessions/generate", {
       method: "POST",
       token,
     }),
@@ -310,6 +337,7 @@ export interface Progress {
     sources: { source: XpSource; label: string; howTo: string; amount: string }[];
   };
   recentEvents: XpEvent[];
+  xpByDay: { date: string; xp: number }[];
   leaderboard: LeaderboardEntry[];
   rank: number | null;
   totalUsers: number;
@@ -336,6 +364,7 @@ export interface CourseCard {
 }
 
 export interface Overview {
+  counts: { subjects: number; tasks: number; courses: number; sessions: number };
   week: {
     start: string;
     studyMinutes: number;
@@ -370,6 +399,13 @@ export const accountApi = {
   get: (token: string) =>
     request<{ user: AuthUser; usage: { aiParses: Usage } }>("/api/account", { token }),
   // Demo upgrade: flips the tier, no payment.
+  // Permanently deletes the caller's own account (re-authenticated by password).
+  remove: (token: string, password: string) =>
+    request<void>("/api/account", {
+      method: "DELETE",
+      body: JSON.stringify({ password, confirm: "DELETE" }),
+      token,
+    }),
   setTier: (token: string, accountType: AccountType) =>
     request<{ user: AuthUser; usage: { aiParses: Usage } }>("/api/account/tier", {
       method: "PATCH",

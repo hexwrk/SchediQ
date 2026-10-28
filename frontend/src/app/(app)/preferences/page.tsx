@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import {
   NUMBER_LIMITS,
   validateHHMM,
@@ -10,6 +10,8 @@ import {
 import { ApiError, Preference, preferencesApi, sessionsApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { FieldError, FieldErrors, collectErrors, hasErrors, inputClass, serverFieldErrors } from "@/lib/form";
+import { ErrorState, LoadingState } from "@/lib/states";
+import { useApi } from "@/lib/use-api";
 
 type Field = "maxDailyMins" | "breakMins" | "preferredStart" | "preferredEnd";
 const FIELDS: Field[] = ["maxDailyMins", "breakMins", "preferredStart", "preferredEnd"];
@@ -46,27 +48,27 @@ function validate(f: FormState): FieldErrors<Field> {
 }
 
 export default function PreferencesPage() {
+  const { data, error, loading, reload, reloading } = useApi("preferences", (t) =>
+    preferencesApi.get(t).then((r) => r.preferences)
+  );
+  if (loading) return <LoadingState label="Loading preferences" rows={2} />;
+  if (error || !data) return <ErrorState message={error ?? "Preferences unavailable."} onRetry={reload} retrying={reloading} />;
+  // Keyed by the loaded row so the form's local state is seeded from it once,
+  // without copying server data into state inside an effect.
+  return <PreferencesForm key={data.id} initial={data} />;
+}
+
+function PreferencesForm({ initial }: { initial: Preference }) {
   const { token } = useAuth();
-  const [form, setForm] = useState<FormState | null>(null);
+  const [form, setForm] = useState<FormState>(() => toForm(initial));
   const [errors, setErrors] = useState<FieldErrors<Field>>({});
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   // After a successful save we offer to regenerate the schedule.
   const [offerRegen, setOfferRegen] = useState(false);
 
-  useEffect(() => {
-    if (!token) return;
-    preferencesApi
-      .get(token)
-      .then((r) => setForm(toForm(r.preferences)))
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Failed to load"))
-      .finally(() => setLoading(false));
-  }, [token]);
-
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
-    if (!form) return;
     const next = { ...form, [key]: value };
     setForm(next);
     // Once an error is showing, re-validate live so it clears as soon as fixed.
@@ -75,7 +77,7 @@ export default function PreferencesPage() {
 
   async function onSave(e: FormEvent) {
     e.preventDefault();
-    if (!token || !form) return;
+    if (!token) return;
     const found = validate(form);
     setErrors(found);
     if (hasErrors(found)) return;
@@ -112,14 +114,6 @@ export default function PreferencesPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to regenerate");
     }
-  }
-
-  if (loading || !form) {
-    return error ? (
-      <p className="text-sm text-red-600">{error}</p>
-    ) : (
-      <p className="text-sm text-text-muted">Loading preferences...</p>
-    );
   }
 
   const daily = NUMBER_LIMITS.maxDailyMins;

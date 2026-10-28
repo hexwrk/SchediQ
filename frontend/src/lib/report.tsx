@@ -20,7 +20,11 @@ function csvCell(value: CsvCell): string {
 }
 
 export function downloadCsv(filename: string, header: string[], rows: CsvCell[][]) {
-  const lines = [header, ...rows].map((r) => r.map(csvCell).join(","));
+  // Pad short rows to the header width so every line has the same number of
+  // columns (spreadsheets and CSV validators expect a rectangular table).
+  const width = Math.max(header.length, ...rows.map((r) => r.length));
+  const pad = (r: CsvCell[]) => [...r, ...Array(Math.max(0, width - r.length)).fill("")];
+  const lines = [header, ...rows].map((r) => pad(r).map(csvCell).join(","));
   // BOM so Excel opens UTF-8 (names with accents) correctly.
   const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -38,15 +42,36 @@ export function slugDate(d = new Date()) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+export interface Range {
+  from: string; // YYYY-MM-DD or "" (open)
+  to: string;
+}
+
+function rangeLabel({ from, to }: Range): string {
+  const f = (v: string) => new Date(`${v}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  if (from && to) return `${f(from)} to ${f(to)}`;
+  if (from) return `From ${f(from)}`;
+  if (to) return `Up to ${f(to)}`;
+  return "All dates";
+}
+
 export function ReportFrame({
   title,
   subtitle,
   onCsv,
+  range,
+  onRange,
+  rangeHint,
   children,
 }: {
   title: string;
   subtitle: string;
   onCsv: () => void;
+  // Optional date-range filter. The inputs are screen-only; the chosen
+  // period is printed in the header so the PDF says what it covers.
+  range?: Range;
+  onRange?: (r: Range) => void;
+  rangeHint?: string;
   children: React.ReactNode;
 }) {
   const { user } = useAuth();
@@ -73,12 +98,42 @@ export function ReportFrame({
         </div>
       </div>
 
+      {range && onRange && (
+        <div className="flex flex-wrap items-end gap-3 rounded-card border border-border bg-surface p-4 print:hidden">
+          <label className="flex flex-col gap-1 text-xs font-medium text-text-muted">
+            From
+            <input
+              type="date"
+              value={range.from}
+              max={range.to || undefined}
+              onChange={(e) => onRange({ ...range, from: e.target.value })}
+              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-text outline-none focus:border-primary"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-text-muted">
+            To
+            <input
+              type="date"
+              value={range.to}
+              min={range.from || undefined}
+              onChange={(e) => onRange({ ...range, to: e.target.value })}
+              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-text outline-none focus:border-primary"
+            />
+          </label>
+          <button onClick={() => onRange({ from: "", to: "" })} className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-bg">
+            All dates
+          </button>
+          {rangeHint && <span className="text-xs text-text-muted">{rangeHint}</span>}
+        </div>
+      )}
+
       <article className="flex flex-col gap-5 rounded-card border border-border bg-surface p-8 print:border-0 print:p-0">
         <header className="flex items-start justify-between gap-4 border-b border-border pb-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-primary">SchediQ report</p>
             <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
             <p className="text-sm text-text-muted">{subtitle}</p>
+            {range && <p className="mt-1 text-sm font-medium">Period: {rangeLabel(range)}</p>}
           </div>
           <div className="text-right text-sm">
             <p className="font-medium">{user?.name}</p>
@@ -98,9 +153,19 @@ export function ReportFrame({
   );
 }
 
+export function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="flex min-w-0 break-inside-avoid flex-col gap-2 rounded-lg border border-border p-4">
+      <h2 className="text-sm font-semibold">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
 export function ReportTable({ head, rows, align }: { head: string[]; rows: CsvCell[][]; align?: ("l" | "r")[] }) {
   return (
-    <table className="w-full border-collapse text-sm">
+    <div className="overflow-x-auto">
+    <table className="w-full min-w-[480px] border-collapse text-sm print:min-w-0">
       <thead>
         <tr className="border-b-2 border-text/20 text-left text-xs uppercase tracking-wide text-text-muted">
           {head.map((h, i) => (
@@ -122,6 +187,7 @@ export function ReportTable({ head, rows, align }: { head: string[]; rows: CsvCe
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 

@@ -28,6 +28,27 @@ shown in code.
 - Emails are stored lower-cased and matched case-insensitively, so
   `Tristan@Gmail.com` and `tristan@gmail.com` cannot be two different accounts.
 
+## 2b. Forgot password (DEMO MODE) and account deletion
+
+- `POST /api/auth/forgot` always answers with the same generic message, whether
+  or not the email is registered, so it cannot be used to enumerate accounts.
+- The reset token is 32 random bytes (256 bits, `crypto.randomBytes`), sent only
+  in the link. The database stores its **SHA-256 hash**, so a leaked
+  `PasswordResetToken` row cannot be turned into a working link. A fast hash is
+  fine here (unlike passwords) because a 256-bit random value cannot be brute-forced.
+- Tokens expire after **30 minutes** and are **single use**. Requesting a new link,
+  or using one, burns every other outstanding link for that account.
+- The new password goes through the same shared validator and bcrypt (12 rounds).
+- **Demo mode (documented limitation):** there is no email service, so the API
+  returns the reset link in the response and logs it as `[demo mail] ...`. That
+  is only acceptable locally: it hands the link to whoever submits the form,
+  which in production would allow account takeover by email address. It is on by
+  default only when `NODE_ENV` is not `production`; `RESET_DEMO_MODE=false` turns
+  it off (the link is then only logged, ready to be swapped for a real mailer).
+- `DELETE /api/account` requires the **current password** (a stolen token alone
+  cannot destroy an account) plus `confirm: "DELETE"`. It cascades to all owned
+  rows. The last remaining SUPER_ADMIN cannot delete themselves.
+
 ## 3. Sessions: JWT bearer tokens
 
 - On login or register the API signs a JWT containing only `{ userId }`, with
@@ -130,7 +151,11 @@ pass. A real billing limit would use a row lock.
   and email, plus lockout or backoff).
 - No refresh tokens or server-side token revocation. Logout clears the client
   token only. A role change is enforced immediately for admin routes because the
-  role is read from the DB.
+  role is read from the DB, and a deleted account's token stops working (the user
+  no longer exists). A **password reset does not yet invalidate JWTs already
+  issued**; the fix is a `tokenVersion` (or `passwordChangedAt`) on User, checked
+  by `requireAuth`.
+- No rate limiting on `/api/auth/forgot` either (pair with the login limiter).
 - CORS defaults to `*` when `CORS_ORIGIN` is unset. Always set it outside local
   development.
 - No security headers middleware (helmet, CSP) on the API yet.

@@ -1,19 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
-import {
-  ApiError,
-  Subject,
-  Task,
-  TaskPriority,
-  TaskStatus,
-  subjectsApi,
-  tasksApi,
-} from "@/lib/api";
-import { useAuth } from "@/lib/auth-context";
-import { PlusIcon } from "@/lib/icons";
+import { FormEvent, useState } from "react";
 import { NUMBER_LIMITS } from "@shared/validation";
+import { Subject, Task, TaskPriority, TaskStatus, subjectsApi, tasksApi } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
+import { toLocalInput } from "@/lib/dates";
 import {
   FieldError,
   FieldErrors,
@@ -24,6 +16,10 @@ import {
   serverFieldErrors,
   validateTaskForm,
 } from "@/lib/form";
+import { PlusIcon } from "@/lib/icons";
+import { EmptyState, ErrorState, LoadingState } from "@/lib/states";
+import { useXpReward } from "@/lib/ui";
+import { errorMessage, useApi } from "@/lib/use-api";
 
 const PRIORITY_COLOR: Record<TaskPriority, string> = {
   HIGH: "var(--amber)",
@@ -31,12 +27,16 @@ const PRIORITY_COLOR: Record<TaskPriority, string> = {
   LOW: "var(--text-muted)",
 };
 
+async function loadTasks(token: string): Promise<{ tasks: Task[]; subjects: Subject[] }> {
+  const [t, s] = await Promise.all([tasksApi.list(token), subjectsApi.list(token)]);
+  return { tasks: t.tasks, subjects: s.subjects };
+}
+
 export default function TasksPage() {
   const { token } = useAuth();
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, loading, reload, reloading, mutate } = useApi("tasks", loadTasks);
+  const { reward, float } = useXpReward();
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Inline edit state.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -50,23 +50,15 @@ export default function TasksPage() {
   });
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<TaskField>>({});
 
-  useEffect(() => {
-    if (!token) return;
-    Promise.all([tasksApi.list(token), subjectsApi.list(token)])
-      .then(([t, s]) => {
-        setTasks(t.tasks);
-        setSubjects(s.subjects);
-      })
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Failed to load"))
-      .finally(() => setLoading(false));
-  }, [token]);
+  const replace = (task: Task) =>
+    mutate((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === task.id ? task : t)) }));
 
   function startEdit(task: Task) {
     setEditingId(task.id);
     setFieldErrors({});
     setForm({
       title: task.title,
-      deadline: task.deadline.slice(0, 16),
+      deadline: toLocalInput(task.deadline),
       durationMin: String(task.durationMin),
       priority: task.priority,
       subjectId: task.subjectId ?? "",
@@ -87,39 +79,48 @@ export default function TasksPage() {
         priority: form.priority,
         subjectId: form.subjectId || null,
       });
-      setTasks((prev) => prev.map((t) => (t.id === task.id ? task : t)));
+      replace(task);
       setEditingId(null);
     } catch (err) {
       const fromServer = serverFieldErrors(err, TASK_FIELDS);
       setFieldErrors(fromServer);
-      if (!hasErrors(fromServer)) setError(err instanceof ApiError ? err.message : "Failed to save");
+      if (!hasErrors(fromServer)) setActionError(errorMessage(err, "Failed to save"));
     }
   }
 
+  // Ticking a lesson-linked task also completes its lesson server-side, which
+  // can earn XP, so it goes through reward() to show the gain.
   async function toggleDone(task: Task) {
     if (!token) return;
     const status: TaskStatus = task.status === "DONE" ? "PENDING" : "DONE";
+    setActionError(null);
     try {
-      const { task: updated } = await tasksApi.update(token, task.id, { status });
-      setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      await reward(async () => {
+        const { task: updated } = await tasksApi.update(token, task.id, { status });
+        replace(updated);
+      });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to update");
+      setActionError(errorMessage(err, "Failed to update"));
     }
   }
 
-  async function remove(id: string) {
-    if (!token) return;
+  async function remove(task: Task) {
+    if (!token || !window.confirm(`Delete "${task.title}" and its study blocks?`)) return;
     try {
-      await tasksApi.remove(token, id);
-      setTasks((prev) => prev.filter((t) => t.id !== id));
+      await tasksApi.remove(token, task.id);
+      mutate((d) => ({ ...d, tasks: d.tasks.filter((t) => t.id !== task.id) }));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to delete");
+      setActionError(errorMessage(err, "Failed to delete"));
     }
   }
+
+  const tasks = data?.tasks ?? [];
+  const subjects = data?.subjects ?? [];
 
   return (
     <div className="flex max-w-3xl flex-col gap-5">
-      <div className="flex items-center justify-between">
+      {float}
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-text-muted">Everything on your plate.</p>
         <Link
           href="/add-task"
@@ -130,12 +131,19 @@ export default function TasksPage() {
         </Link>
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {actionError && <ErrorState title="That didn't work" message={actionError} />}
 
       {loading ? (
-        <p className="text-sm text-text-muted">Loading tasks...</p>
+        <LoadingState label="Loading tasks" />
+      ) : error && !data ? (
+        <ErrorState message={error} onRetry={reload} retrying={reloading} />
       ) : tasks.length === 0 ? (
-        <p className="text-sm text-text-muted">No tasks yet.</p>
+        <EmptyState
+          title="No tasks yet"
+          body="Describe a piece of work in plain English (e.g. 'Revise SQL joins for 2 hours, due Friday') and SchediQ fills in the details and schedules it."
+          actionHref="/add-task"
+          actionLabel="Add your first task"
+        />
       ) : (
         <div className="flex flex-col gap-2">
           {tasks.map((task) =>
@@ -186,10 +194,8 @@ export default function TasksPage() {
                     Priority
                     <select
                       value={form.priority}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, priority: e.target.value as TaskPriority }))
-                      }
-                      className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+                      onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value as TaskPriority }))}
+                      className={inputClass(null)}
                     >
                       <option value="LOW">Low</option>
                       <option value="MEDIUM">Medium</option>
@@ -201,7 +207,7 @@ export default function TasksPage() {
                     <select
                       value={form.subjectId}
                       onChange={(e) => setForm((f) => ({ ...f, subjectId: e.target.value }))}
-                      className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+                      className={inputClass(fieldErrors.subjectId)}
                     >
                       <option value="">None</option>
                       {subjects.map((s) => (
@@ -210,13 +216,11 @@ export default function TasksPage() {
                         </option>
                       ))}
                     </select>
+                    <FieldError message={fieldErrors.subjectId} />
                   </label>
                 </div>
                 <div className="flex gap-2">
-                  <button
-                    type="submit"
-                    className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-                  >
+                  <button type="submit" className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90">
                     Save
                   </button>
                   <button
@@ -233,49 +237,47 @@ export default function TasksPage() {
                 key={task.id}
                 className="flex items-center justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex min-w-0 items-center gap-3">
                   <input
                     type="checkbox"
                     checked={task.status === "DONE"}
                     onChange={() => toggleDone(task)}
-                    className="h-4 w-4 accent-[var(--primary)]"
+                    aria-label={`Mark ${task.title} ${task.status === "DONE" ? "not done" : "done"}`}
+                    className="h-4 w-4 shrink-0 accent-[var(--primary)]"
                   />
-                  <div>
-                    <p
-                      className={`font-medium ${
-                        task.status === "DONE" ? "text-text-muted line-through" : ""
-                      }`}
-                    >
+                  <div className="min-w-0">
+                    <p className={`truncate font-medium ${task.status === "DONE" ? "text-text-muted line-through" : ""}`}>
                       {task.title}
                     </p>
-                    <p className="flex items-center gap-2 text-xs text-text-muted">
+                    <p className="flex flex-wrap items-center gap-x-2 text-xs text-text-muted">
                       <span>{new Date(task.deadline).toLocaleDateString()}</span>
                       <span>·</span>
                       <span>{task.durationMin}min</span>
                       <span>·</span>
-                      <span style={{ color: PRIORITY_COLOR[task.priority] }}>
-                        {task.priority}
-                      </span>
+                      <span style={{ color: PRIORITY_COLOR[task.priority] }}>{task.priority}</span>
                       {task.subject && (
                         <>
                           <span>·</span>
                           <span className="inline-flex items-center gap-1">
-                            <span
-                              className="h-2 w-2 rounded-full"
-                              style={{ background: task.subject.colorTag }}
-                            />
+                            <span className="h-2 w-2 rounded-full" style={{ background: task.subject.colorTag }} />
                             {task.subject.name}
                           </span>
+                        </>
+                      )}
+                      {task.lessonId && (
+                        <>
+                          <span>·</span>
+                          <span className="text-primary">course lesson</span>
                         </>
                       )}
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-3 text-sm">
+                <div className="flex shrink-0 gap-3 text-sm">
                   <button onClick={() => startEdit(task)} className="text-primary hover:underline">
                     Edit
                   </button>
-                  <button onClick={() => remove(task.id)} className="text-red-600 hover:underline">
+                  <button onClick={() => remove(task)} className="text-red-600 hover:underline">
                     Delete
                   </button>
                 </div>

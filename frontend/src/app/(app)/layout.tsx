@@ -2,12 +2,15 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { ProgressProvider, useProgress } from "@/lib/progress-context";
 import {
   BookIcon,
   CapIcon,
+  CloseIcon,
+  MenuIcon,
+  UserIcon,
   DatabaseIcon,
   FlameIcon,
   GridIcon,
@@ -44,6 +47,7 @@ const NAV: NavItem[] = [
   { href: "/reports", label: "Reports", Icon: ReportIcon },
   { href: "/preferences", label: "Preferences", Icon: SlidersIcon },
   { href: "/upgrade", label: "Upgrade", Icon: StarIcon },
+  { href: "/account", label: "Account", Icon: UserIcon },
 ];
 
 // Rendered ONLY for SUPER_ADMIN. Hiding them is UX, not security: every
@@ -65,6 +69,7 @@ const PAGE_TITLES: [string, string][] = [
   ["/reports", "Reports"],
   ["/preferences", "Preferences"],
   ["/upgrade", "Upgrade"],
+  ["/account", "Account"],
   ["/admin/system", "System & backup"],
   ["/admin/data-model", "Data model"],
   ["/admin", "Admin: users"],
@@ -105,10 +110,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   );
 }
 
-function NavLink({ href, label, Icon, active }: NavItem & { active: boolean }) {
+function NavLink({ href, label, Icon, active, onNavigate }: NavItem & { active: boolean; onNavigate: () => void }) {
   return (
     <Link
       href={href}
+      onClick={onNavigate}
+      aria-current={active ? "page" : undefined}
       className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
         active ? "bg-primary/10 text-primary" : "text-text-muted hover:bg-bg hover:text-text"
       }`}
@@ -138,20 +145,42 @@ function Shell({
   const isActive = (href: string) =>
     pathname === href || (href !== "/admin" && pathname.startsWith(`${href}/`));
 
+  // Below lg the sidebar is an off-canvas drawer opened from the top bar.
+  // Closing happens in the link's click handler (not an effect on pathname).
+  const [menuOpen, setMenuOpen] = useState(false);
+  const close = () => setMenuOpen(false);
+
   return (
     <div className="flex min-h-screen bg-bg text-text">
-      {/* Fixed left sidebar */}
-      <aside className="fixed inset-y-0 left-0 flex w-56 print:hidden flex-col border-r border-border bg-surface">
-        <div className="flex items-center gap-2 px-5 py-5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">
-            SQ
+      {menuOpen && (
+        <button
+          aria-label="Close menu"
+          onClick={close}
+          className="fixed inset-0 z-30 bg-black/30 lg:hidden print:hidden"
+        />
+      )}
+
+      <aside
+        id="app-sidebar"
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-surface transition-transform lg:w-56 lg:translate-x-0 print:hidden ${
+          menuOpen ? "translate-x-0 shadow-xl" : "-translate-x-full"
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2 px-5 py-5">
+          <span className="flex items-center gap-2">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">
+              SQ
+            </span>
+            <span className="text-lg font-semibold tracking-tight">SchediQ</span>
           </span>
-          <span className="text-lg font-semibold tracking-tight">SchediQ</span>
+          <button onClick={close} aria-label="Close menu" className="rounded-lg p-1 text-text-muted hover:bg-bg lg:hidden">
+            <CloseIcon />
+          </button>
         </div>
 
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3">
           {NAV.map((item) => (
-            <NavLink key={item.href} {...item} active={isActive(item.href)} />
+            <NavLink key={item.href} {...item} active={isActive(item.href)} onNavigate={close} />
           ))}
           {isAdmin && (
             <>
@@ -159,7 +188,7 @@ function Shell({
                 Super admin
               </span>
               {ADMIN_NAV.map((item) => (
-                <NavLink key={item.href} {...item} active={isActive(item.href)} />
+                <NavLink key={item.href} {...item} active={isActive(item.href)} onNavigate={close} />
               ))}
             </>
           )}
@@ -174,23 +203,38 @@ function Shell({
         </button>
       </aside>
 
-      {/* Main column, offset by the sidebar width */}
-      <div className="flex min-h-screen flex-1 flex-col pl-56 print:pl-0">
-        <header className="flex print:hidden items-center justify-between gap-4 border-b border-border bg-surface px-8 py-4">
-          <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
-          <div className="flex items-center gap-5 text-sm">
+      {/* Main column, offset by the sidebar width on large screens only */}
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:pl-56 print:pl-0">
+        <header className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border bg-surface px-4 py-3 sm:px-8 sm:py-4 print:hidden">
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              onClick={() => setMenuOpen(true)}
+              aria-label="Open menu"
+              aria-controls="app-sidebar"
+              aria-expanded={menuOpen}
+              className="rounded-lg p-1.5 text-text hover:bg-bg lg:hidden"
+            >
+              <MenuIcon />
+            </button>
+            <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
+          </div>
+          <div className="flex items-center gap-3 text-sm sm:gap-5">
             <Hud />
             <div className="flex items-center gap-3">
               <TierBadge user={user} />
-              <span className="text-text-muted">{userLabel}</span>
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+              <span className="hidden text-text-muted md:inline">{userLabel}</span>
+              <Link
+                href="/account"
+                title="Account"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
+              >
                 {userLabel.slice(0, 1).toUpperCase()}
-              </span>
+              </Link>
             </div>
           </div>
         </header>
 
-        <main className="flex-1 px-8 py-8 print:p-0">{children}</main>
+        <main className="min-w-0 flex-1 px-4 py-6 sm:px-8 sm:py-8 print:p-0">{children}</main>
       </div>
     </div>
   );

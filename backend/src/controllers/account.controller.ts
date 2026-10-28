@@ -1,3 +1,4 @@
+import bcrypt from "bcryptjs";
 import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
@@ -32,4 +33,35 @@ export async function updateTier(req: Request, res: Response) {
   });
   const usage = await aiUsageFor(user.id, user.accountType);
   return res.json({ user: toPublicUser(user), usage: { aiParses: usage } });
+}
+
+const deleteSchema = z.object({
+  password: z.string().min(1, "Enter your password to confirm."),
+  confirm: z.literal("DELETE", { message: "Type DELETE to confirm." }),
+});
+
+// DELETE /api/account  { password, confirm: "DELETE" }
+// Self-service account deletion. Re-authenticates with the password (a stolen
+// token alone cannot wipe an account) and cascades to subjects, tasks,
+// sessions, courses, lessons and preferences via the schema's onDelete rules.
+export async function deleteAccount(req: Request, res: Response) {
+  const { password } = deleteSchema.parse(req.body);
+  const user = await prisma.user.findUnique({ where: { id: req.userId } });
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  if (!(await bcrypt.compare(password, user.passwordHash))) {
+    return res.status(400).json({
+      error: "Password is incorrect.",
+      details: { fieldErrors: { password: ["Password is incorrect."] } },
+    });
+  }
+  // Never leave the system without an administrator.
+  if (user.role === "SUPER_ADMIN") {
+    const admins = await prisma.user.count({ where: { role: "SUPER_ADMIN" } });
+    if (admins <= 1) {
+      return res.status(400).json({ error: "You are the only super admin. Promote another admin before deleting this account." });
+    }
+  }
+  await prisma.user.delete({ where: { id: user.id } });
+  return res.status(204).send();
 }

@@ -24,6 +24,23 @@ model User {
   preferences  Preference?
   aiParses     AiParseLog[]
   courses      Course[]
+  resetTokens  PasswordResetToken[]
+}
+
+// Forgot-password tokens. Only a SHA-256 hash of the token is stored, so a
+// leaked database row cannot be replayed as a reset link. Single use (usedAt)
+// and short-lived (expiresAt).
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 enum Role {

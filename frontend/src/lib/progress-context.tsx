@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useEffectEvent,
   useRef,
   useState,
 } from "react";
@@ -54,9 +55,21 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
   // from the database, so this keeps the HUD exactly in step with what is
   // stored after an action on any page, and a hard reload simply refetches.
   const pathname = usePathname();
+  // State is only set in the promise callbacks (not synchronously in the
+  // effect), which keeps React from cascading renders.
+  const fetchOnNavigate = useEffectEvent(() => {
+    if (!token) return;
+    progressApi.get(token).then(
+      (p) => {
+        setProgress(p);
+        setLoading(false);
+      },
+      () => setLoading(false)
+    );
+  });
   useEffect(() => {
-    if (token) refresh();
-  }, [token, refresh, pathname]);
+    fetchOnNavigate();
+  }, [token, pathname]);
 
   const celebrate = useCallback((title: string, subtitle: string) => {
     const id = ++idRef.current;

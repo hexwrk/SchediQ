@@ -106,6 +106,17 @@ function startOfWeek(now: Date): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow, 0, 0, 0, 0);
 }
 
+function xpPerDay(events: { amount: number; at: Date }[]): { date: string; xp: number }[] {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const totals = new Map<string, number>();
+  for (const e of events) {
+    const d = e.at;
+    const key = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    totals.set(key, (totals.get(key) ?? 0) + e.amount);
+  }
+  return [...totals.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, xp]) => ({ date, xp }));
+}
+
 // GET /api/progress
 export async function getProgress(req: Request, res: Response) {
   const userId = req.userId as string;
@@ -152,6 +163,9 @@ export async function getProgress(req: Request, res: Response) {
     breakdown: xpBreakdown(events),
     xpRules: { values: XP_RULES, sources: XP_SOURCE_INFO },
     recentEvents: events.slice(-8).reverse(),
+    // XP per local day over the whole history (sparse: active days only), for
+    // the Progress report's date-range chart.
+    xpByDay: xpPerDay(events),
     leaderboard,
     rank: me?.rank ?? null,
     totalUsers: leaderboard.length,
@@ -236,7 +250,16 @@ export async function getOverview(req: Request, res: Response) {
     };
   });
 
+  // Drives first-run onboarding on the dashboard (what has the user set up yet?).
+  const counts = {
+    subjects: subjects.length,
+    tasks: tasks.length,
+    courses: courses.length,
+    sessions: await prisma.studySession.count({ where: { task: { userId } } }),
+  };
+
   return res.json({
+    counts,
     week,
     mastery,
     masteryWeights: MASTERY_WEIGHTS,

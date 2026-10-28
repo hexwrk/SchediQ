@@ -2,13 +2,20 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import { COURSE_LEVELS, NUMBER_LIMITS, TOPIC_MAX, validateIntInRange, validateTopic } from "@shared/validation";
 import { ApiError, Course, CourseLevel, Subject, Usage, coursesApi, subjectsApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { FieldError, FieldErrors, UpgradePrompt, collectErrors, hasErrors, inputClass, serverFieldErrors } from "@/lib/form";
 import { CapIcon, SparkIcon } from "@/lib/icons";
 import { LevelPill, ProgressBar } from "@/lib/ui";
+import { EmptyState, ErrorState, LoadingState } from "@/lib/states";
+import { errorMessage, useApi } from "@/lib/use-api";
+
+async function loadCourses(token: string) {
+  const [c, s] = await Promise.all([coursesApi.list(token), subjectsApi.list(token)]);
+  return { courses: c.courses, usage: c.usage, subjects: s.subjects };
+}
 
 type Field = "topic" | "level" | "lessonCount" | "subjectId";
 const FIELDS: Field[] = ["topic", "level", "lessonCount", "subjectId"];
@@ -16,11 +23,11 @@ const FIELDS: Field[] = ["topic", "level", "lessonCount", "subjectId"];
 export default function CoursesPage() {
   const { token } = useAuth();
   const router = useRouter();
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [usage, setUsage] = useState<Usage | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, loading, reload, reloading } = useApi("courses", loadCourses);
+  const courses: Course[] = data?.courses ?? [];
+  const subjects: Subject[] = data?.subjects ?? [];
+  const usage: Usage | null = data?.usage ?? null;
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const [topic, setTopic] = useState("");
   const [level, setLevel] = useState<CourseLevel>("BEGINNER");
@@ -29,18 +36,6 @@ export default function CoursesPage() {
   const [errors, setErrors] = useState<FieldErrors<Field>>({});
   const [generating, setGenerating] = useState(false);
   const [upgradeMsg, setUpgradeMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!token) return;
-    Promise.all([coursesApi.list(token), subjectsApi.list(token)])
-      .then(([c, s]) => {
-        setCourses(c.courses);
-        setUsage(c.usage);
-        setSubjects(s.subjects);
-      })
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Failed to load courses"))
-      .finally(() => setLoading(false));
-  }, [token]);
 
   // Picking a subject pre-fills the topic, the common "learn my weak subject" path.
   function pickSubject(id: string) {
@@ -52,7 +47,7 @@ export default function CoursesPage() {
   async function onGenerate(e: FormEvent) {
     e.preventDefault();
     if (!token) return;
-    setError(null);
+    setActionError(null);
     setUpgradeMsg(null);
     const found = collectErrors<Field>({
       topic: validateTopic(topic),
@@ -78,21 +73,26 @@ export default function CoursesPage() {
       } else {
         const fromServer = serverFieldErrors(err, FIELDS);
         setErrors(fromServer);
-        if (!hasErrors(fromServer)) setError(err instanceof ApiError ? err.message : "Could not generate the course");
+        if (!hasErrors(fromServer)) setActionError(errorMessage(err, "Could not generate the course"));
       }
       setGenerating(false);
     }
   }
 
   async function remove(c: Course) {
-    if (!token || !window.confirm(`Delete "${c.title}" and its lesson progress?`)) return;
+    if (
+      !token ||
+      !window.confirm(
+        `Delete "${c.title}"? Its ${c.progress.lessonsTotal} lessons and quiz scores are deleted too, and the XP they earned is removed.`
+      )
+    )
+      return;
+    setActionError(null);
     try {
       await coursesApi.remove(token, c.id);
-      setCourses((prev) => prev.filter((x) => x.id !== c.id));
-      const res = await coursesApi.list(token);
-      setUsage(res.usage);
+      await reload();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to delete");
+      setActionError(errorMessage(err, "Failed to delete"));
     }
   }
 
@@ -105,13 +105,16 @@ export default function CoursesPage() {
         <p className="text-sm text-text-muted">
           Learn a topic step by step. Lessons and quizzes earn XP and raise the linked subject&rsquo;s mastery.
         </p>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {actionError && <ErrorState title="That didn't work" message={actionError} />}
         {loading ? (
-          <p className="text-sm text-text-muted">Loading courses...</p>
+          <LoadingState label="Loading courses" />
+        ) : error && !data ? (
+          <ErrorState message={error} onRetry={reload} retrying={reloading} />
         ) : courses.length === 0 ? (
-          <div className="rounded-card border border-dashed border-border bg-surface p-8 text-center text-sm text-text-muted">
-            No courses yet. Generate your first one on the right.
-          </div>
+          <EmptyState
+            title="No courses yet"
+            body="Tell SchediQ what you want to learn and it builds a step-by-step course with quizzes. Link it to a weak subject to raise that subject's mastery."
+          />
         ) : (
           courses.map((c) => (
             <div key={c.id} className="flex flex-col gap-3 rounded-card border border-border bg-surface p-4">

@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { use, useCallback, useEffect, useState } from "react";
-import { ApiError, CourseDetail, QuizResult, lessonsApi, coursesApi } from "@/lib/api";
+import { use, useState } from "react";
+import { QuizResult, lessonsApi, coursesApi } from "@/lib/api";
+import { ErrorState, LoadingState } from "@/lib/states";
+import { errorMessage, useApi } from "@/lib/use-api";
 import { useAuth } from "@/lib/auth-context";
 import { useProgress } from "@/lib/progress-context";
 import { ProgressBar, useXpReward } from "@/lib/ui";
@@ -21,31 +23,22 @@ function LessonView({ id, lessonId }: { id: string; lessonId: string }) {
   const { token } = useAuth();
   const { progress } = useProgress();
   const { reward, float } = useXpReward();
-  const [course, setCourse] = useState<CourseDetail | null>(null);
-  const [answers, setAnswers] = useState<(number | null)[]>([]);
+  const { data, error: loadError, loading, reload, reloading } = useApi(`course:${id}`, (t) =>
+    coursesApi.get(t, id).then((r) => r.course)
+  );
+  const course = data ?? null;
+  // Chosen options. Empty until the learner picks one; the effective list is
+  // derived below from the quiz length, so nothing is copied into state.
+  const [picked, setPicked] = useState<(number | null)[]>([]);
   const [result, setResult] = useState<QuizResult | null>(null);
   const [quizError, setQuizError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    if (!token) return;
-    try {
-      const { course } = await coursesApi.get(token, id);
-      setCourse(course);
-      const lesson = course.lessons.find((l) => l.id === lessonId);
-      // Keep answers already picked when the lesson reloads after a submit.
-      setAnswers((prev) => (prev.length ? prev : (lesson?.quiz ?? []).map(() => null)));
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to load lesson");
-    }
-  }, [token, id, lessonId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const load = reload;
 
   const lesson = course?.lessons.find((l) => l.id === lessonId);
+  const quizLength = lesson?.quiz.length ?? 0;
+  const answers: (number | null)[] = picked.length === quizLength ? picked : Array(quizLength).fill(null);
   const index = course?.lessons.findIndex((l) => l.id === lessonId) ?? -1;
   const prev = index > 0 ? course?.lessons[index - 1] : undefined;
   const next = course && index >= 0 ? course.lessons[index + 1] : undefined;
@@ -67,7 +60,7 @@ function LessonView({ id, lessonId }: { id: string; lessonId: string }) {
       });
       await load();
     } catch (err) {
-      setQuizError(err instanceof ApiError ? err.message : "Could not submit the quiz");
+      setQuizError(errorMessage(err, "Could not submit the quiz"));
     } finally {
       setBusy(false);
     }
@@ -83,15 +76,22 @@ function LessonView({ id, lessonId }: { id: string; lessonId: string }) {
       });
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not update the lesson");
+      setError(errorMessage(err, "Could not update the lesson"));
     } finally {
       setBusy(false);
     }
   }
 
-  if (error && !course) return <p className="text-sm text-red-600">{error}</p>;
-  if (!course) return <p className="text-sm text-text-muted">Loading lesson...</p>;
-  if (!lesson) return <p className="text-sm text-red-600">Lesson not found.</p>;
+  if (loading) return <LoadingState label="Loading lesson" rows={2} />;
+  if (!course)
+    return <ErrorState title="Couldn't open this lesson" message={loadError ?? "Course not found."} onRetry={reload} retrying={reloading} />;
+  if (!lesson)
+    return (
+      <ErrorState
+        title="Lesson not found"
+        message="It may have been deleted with its course. Go back to your courses to continue."
+      />
+    );
 
   const passMark = progress?.xpRules.values.QUIZ_PASS_MARK ?? 70;
   const paragraphs = lesson.content.split(/\n\s*\n/);
@@ -183,7 +183,7 @@ function LessonView({ id, lessonId }: { id: string; lessonId: string }) {
                       checked={chosen}
                       onChange={() => {
                         setResult(null);
-                        setAnswers((a) => a.map((v, i) => (i === qi ? oi : v)));
+                        setPicked(answers.map((v, i) => (i === qi ? oi : v)));
                       }}
                       className="accent-[var(--primary)]"
                     />

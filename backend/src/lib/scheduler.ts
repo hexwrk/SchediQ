@@ -25,6 +25,13 @@ const PRIORITY_RANK: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
 // pathological input (e.g. a zero-capacity day) can never infinite-loop.
 const MAX_ITERATIONS = 100000;
 
+// Planning horizon: the scheduler never places blocks more than this many days
+// ahead of `now`. It bounds the work for very large task lists (the day loop
+// can never run away) and keeps the calendar meaningful. Minutes that do not
+// fit inside the horizon are NOT dropped silently: they are reported as an
+// UNSCHEDULED issue (see scheduleIssues) so the UI can say why.
+export const HORIZON_DAYS = 60;
+
 export type Priority = "LOW" | "MEDIUM" | "HIGH";
 
 export interface SchedulerTask {
@@ -45,6 +52,16 @@ export interface SchedulerPrefs {
   breakMins: number;
   clustering: boolean;
 }
+
+// Mirrors the Preference model's @default values: what a user with no saved
+// preferences is scheduled with.
+export const DEFAULT_PREFS: SchedulerPrefs = {
+  maxDailyMins: 180,
+  preferredStart: "09:00",
+  preferredEnd: "21:00",
+  breakMins: 10,
+  clustering: true,
+};
 
 export interface SchedulerOpts {
   // Reference "now". Day packing starts on this calendar day. Supplied by the
@@ -128,8 +145,18 @@ export function buildSchedule(
 
   // Per-day running state.
   let taskMinsUsedToday = 0;      // counts toward maxDailyMins
-  let cursorMin = windowStart;    // next free minute-of-day inside the window
+  // Today only: never place a block in the past. Start at the later of the
+  // window start and "now" rounded UP to the next 5 minutes. A task whose
+  // deadline has already passed is therefore placed as soon as possible from
+  // here, not back-dated (it is flagged OVERDUE by scheduleIssues).
+  const nowMin = now.getHours() * 60 + now.getMinutes() + (now.getSeconds() > 0 || now.getMilliseconds() > 0 ? 1 : 0);
+  let cursorMin = Math.max(windowStart, Math.ceil(nowMin / 5) * 5);
   let lastCategoryToday: string | null = null; // for the switch penalty
+
+  // Last calendar day (local) a block may be placed on.
+  const horizonEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + HORIZON_DAYS - 1);
+  const pastHorizon = () =>
+    new Date(dayYear, dayMonth, dayDate).getTime() > horizonEnd.getTime();
 
   let iterations = 0;
 
@@ -159,6 +186,11 @@ export function buildSchedule(
     while (remaining > 0) {
       if (++iterations > MAX_ITERATIONS) {
         // Defensive cap: stop rather than loop forever on pathological input.
+        return sessions;
+      }
+      // Out of horizon: stop placing. Every remaining minute (this task and all
+      // later ones) is reported as unscheduled rather than pushed ever further.
+      if (pastHorizon()) {
         return sessions;
       }
 
@@ -234,4 +266,120 @@ function clusterBySubject(sorted: SchedulerTask[]): SchedulerTask[] {
     result.push(...groups.get(key)!);
   }
   return result;
+}
+
+// ---------- Schedule issues (never drop a task silently) ----------
+
+export type IssueKind = "OVERDUE" | "AT_RISK" | "UNSCHEDULED";
+
+export interface ScheduleIssue {
+  taskId: string;
+  title: string;
+  kind: IssueKind;
+  // Human-readable explanation shown on the dashboard.
+  reason: string;
+  // Minutes of the task that have no study block at all.
+  unplacedMin: number;
+  deadline: string;
+}
+
+export interface IssueTask {
+  id: string;
+  title: string;
+  deadline: Date | string;
+  durationMin: number;
+  status: string;
+  updatedAt?: Date | string;
+}
+
+export interface IssueSession {
+  taskId: string;
+  startsAt: Date | string;
+  endsAt: Date | string;
+  createdAt?: Date | string;
+}
+
+function fmtDay(d: Date): string {
+  return d.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" });
+}
+
+// PURE: derive per-task problems from the stored tasks + sessions. Runs on
+// every schedule load (not just on regenerate), so the reasons stay accurate
+// as time passes. One task can have several issues (e.g. OVERDUE and
+// UNSCHEDULED); the dashboard lists each with its reason.
+export function scheduleIssues(
+  tasks: IssueTask[],
+  sessions: IssueSession[],
+  prefs: SchedulerPrefs,
+  now: Date
+): ScheduleIssue[] {
+  const byTask = new Map<string, IssueSession[]>();
+  for (const s of sessions) {
+    const list = byTask.get(s.taskId) ?? [];
+    list.push(s);
+    byTask.set(s.taskId, list);
+  }
+  // When the plan was last generated: the newest planned session's createdAt.
+  // A task edited after that simply has not been scheduled YET.
+  const lastGenerated = sessions.reduce<number>(
+    (max, s) => (s.createdAt ? Math.max(max, new Date(s.createdAt).getTime()) : max),
+    0
+  );
+  const windowMins = Math.max(0, parseHHMM(prefs.preferredEnd) - parseHHMM(prefs.preferredStart));
+  const noCapacity = windowMins <= 0 || prefs.maxDailyMins <= 0;
+
+  const issues: ScheduleIssue[] = [];
+  // Stable order (deadline, then id) so the list does not jump between loads.
+  const ordered = [...tasks].sort(
+    (a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime() || (a.id < b.id ? -1 : 1)
+  );
+
+  for (const t of ordered) {
+    if (t.status === "DONE") continue;
+    const deadline = new Date(t.deadline);
+    const own = byTask.get(t.id) ?? [];
+    const placed = own.reduce(
+      (sum, s) => sum + Math.round((new Date(s.endsAt).getTime() - new Date(s.startsAt).getTime()) / 60000),
+      0
+    );
+    const unplaced = Math.max(0, t.durationMin - placed);
+    const base = { taskId: t.id, title: t.title, deadline: deadline.toISOString() };
+
+    if (deadline.getTime() < now.getTime()) {
+      issues.push({
+        ...base,
+        kind: "OVERDUE",
+        reason: `Deadline passed on ${fmtDay(deadline)}. It is scheduled as soon as possible instead of being dropped.`,
+        unplacedMin: unplaced,
+      });
+    }
+
+    if (unplaced > 0) {
+      let reason: string;
+      if (noCapacity) {
+        reason = "Your study window or daily limit is zero, so nothing can be placed. Fix it in Preferences.";
+      } else if (t.updatedAt && lastGenerated && new Date(t.updatedAt).getTime() > lastGenerated && placed === 0) {
+        reason = "Added or changed after the last schedule. Regenerate the schedule to place it.";
+      } else if (sessions.length === 0) {
+        reason = "No schedule generated yet. Click Regenerate schedule.";
+      } else {
+        reason = `${unplaced} min did not fit in the next ${HORIZON_DAYS} days at ${prefs.maxDailyMins} min/day (${prefs.preferredStart}-${prefs.preferredEnd}). Raise the daily limit or widen the window.`;
+      }
+      issues.push({ ...base, kind: "UNSCHEDULED", reason, unplacedMin: unplaced });
+    }
+
+    // Placed (at least partly) but finishing after the deadline.
+    if (deadline.getTime() >= now.getTime() && own.length > 0) {
+      const lastEnd = Math.max(...own.map((s) => new Date(s.endsAt).getTime()));
+      if (lastEnd > deadline.getTime()) {
+        issues.push({
+          ...base,
+          kind: "AT_RISK",
+          reason: `Its last study block ends ${fmtDay(new Date(lastEnd))}, after the ${fmtDay(deadline)} deadline. Raise the daily limit, raise its priority, or move the deadline.`,
+          unplacedMin: unplaced,
+        });
+      }
+    }
+  }
+  return issues;
 }

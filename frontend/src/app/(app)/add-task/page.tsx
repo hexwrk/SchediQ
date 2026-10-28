@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import {
   ApiError,
   CognitiveCategory,
@@ -14,6 +14,9 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { SparkIcon } from "@/lib/icons";
+import { toLocalInput } from "@/lib/dates";
+import { ErrorState } from "@/lib/states";
+import { useApi } from "@/lib/use-api";
 import { NUMBER_LIMITS, TITLE_MAX } from "@shared/validation";
 import {
   FieldError,
@@ -29,20 +32,15 @@ import {
 
 const CATEGORIES: CognitiveCategory[] = ["Analytical", "Verbal", "Technical", "General"];
 
-// Convert an ISO string to the value a datetime-local input expects (local
-// time, no timezone suffix). Returns "" for null.
-function toLocalInput(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 export default function AddTaskPage() {
   const { token } = useAuth();
   const router = useRouter();
 
-  const [subjects, setSubjects] = useState<Subject[]>([]);
+  // Subjects only fill the dropdown; if they fail to load the form still works
+  // (task saved without a subject) and a warning with Retry is shown.
+  const subjectsQuery = useApi("subjects", (t) => subjectsApi.list(t).then((r) => r.subjects));
+  const [extraSubjects, setExtraSubjects] = useState<Subject[]>([]);
+  const subjects = [...(subjectsQuery.data ?? []), ...extraSubjects];
   const [text, setText] = useState("");
   const [parsing, setParsing] = useState(false);
   const [parseInfo, setParseInfo] = useState<ParsedTask | null>(null);
@@ -63,11 +61,6 @@ export default function AddTaskPage() {
   // New-subject confirmation state (shown when the parser flags isNewSubject).
   const [pendingSubjectName, setPendingSubjectName] = useState("");
   const [pendingCategory, setPendingCategory] = useState<CognitiveCategory>("General");
-
-  useEffect(() => {
-    if (!token) return;
-    subjectsApi.list(token).then((r) => setSubjects(r.subjects)).catch(() => {});
-  }, [token]);
 
   async function onParse() {
     if (!token || !text.trim()) return;
@@ -110,7 +103,7 @@ export default function AddTaskPage() {
         name: pendingSubjectName,
         cognitiveCategory: pendingCategory,
       });
-      setSubjects((prev) => [...prev, subject]);
+      setExtraSubjects((prev) => [...prev, subject]);
       setSubjectId(subject.id);
       setPendingSubjectName("");
     } catch (err) {
@@ -186,6 +179,14 @@ export default function AddTaskPage() {
       </div>
 
       {upgradeMsg && <UpgradePrompt message={upgradeMsg} />}
+      {subjectsQuery.error && (
+        <ErrorState
+          title="Couldn't load your subjects"
+          message={`${subjectsQuery.error} You can still save the task without a subject.`}
+          onRetry={subjectsQuery.reload}
+          retrying={subjectsQuery.reloading}
+        />
+      )}
 
       {/* New-subject confirmation */}
       {pendingSubjectName && (

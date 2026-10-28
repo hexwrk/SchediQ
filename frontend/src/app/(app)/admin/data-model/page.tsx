@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { AccessDenied } from "@/lib/access-denied";
-import { ApiError, DataModel, adminApi } from "@/lib/api";
-import { useAuth } from "@/lib/auth-context";
+import { adminApi } from "@/lib/api";
+import { ErrorState, LoadingState } from "@/lib/states";
+import { useApi } from "@/lib/use-api";
 
 // Read-only "how it links together" view for presentations: the entities,
 // their relationships in plain language, and live row counts from Postgres.
@@ -32,25 +32,11 @@ const BW = 130;
 const BH = 44;
 
 export default function DataModelPage() {
-  const { token } = useAuth();
-  const [model, setModel] = useState<DataModel | null>(null);
-  const [forbidden, setForbidden] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { data: model, error, errorStatus, loading, reload, reloading } = useApi("admin-data-model", adminApi.dataModel);
 
-  useEffect(() => {
-    if (!token) return;
-    adminApi
-      .dataModel(token)
-      .then(setModel)
-      .catch((err) => {
-        if (err instanceof ApiError && err.status === 403) setForbidden(true);
-        else setError(err instanceof ApiError ? err.message : "Failed to load");
-      });
-  }, [token]);
-
-  if (forbidden) return <AccessDenied />;
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
-  if (!model) return <p className="text-sm text-text-muted">Loading data model...</p>;
+  if (errorStatus === 403) return <AccessDenied />;
+  if (loading) return <LoadingState label="Loading data model" rows={3} />;
+  if (!model) return <ErrorState message={error ?? "Data model unavailable."} onRetry={reload} retrying={reloading} />;
 
   const rows = Object.fromEntries(model.entities.map((e) => [e.name, e.rows]));
 

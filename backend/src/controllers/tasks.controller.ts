@@ -72,10 +72,21 @@ export async function updateTask(req: Request, res: Response) {
     }
   }
 
-  const task = await prisma.task.update({
-    where: { id: existing.id },
-    data,
-    include: { subject: true },
+  const task = await prisma.$transaction(async (tx) => {
+    const updated = await tx.task.update({
+      where: { id: existing.id },
+      data,
+      include: { subject: true },
+    });
+    // Ticking a lesson-linked task DONE completes its lesson (same rule as
+    // finishing its study blocks), keeping one progress system.
+    if (data.status === "DONE" && updated.lessonId) {
+      await tx.lesson.updateMany({
+        where: { id: updated.lessonId, completedAt: null },
+        data: { completedAt: new Date() },
+      });
+    }
+    return updated;
   });
   return res.json({ task });
 }

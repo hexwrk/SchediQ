@@ -44,6 +44,8 @@ interface UserSubject {
   cognitiveCategory: string;
 }
 
+const WEEKDAYS: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+
 const MONTHS: Record<string, number> = {
   jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
   jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
@@ -79,6 +81,18 @@ function resolveDeadline(text: string, now: Date): string | null {
       candidate = new Date(year + 1, month, day, 23, 59, 0, 0);
     }
     return candidate.toISOString();
+  }
+
+  // Weekday names: "due Tuesday", "by fri", or even "dueTuesday" (no space).
+  // Resolves to the NEXT occurrence after today, end of day; a bare weekday
+  // that is today means next week's, since "today" has its own rule below.
+  m = lower.match(/(?:\b|due|by|on)(mon|tue|wed|thu|fri|sat|sun)(?:day|sday|nesday|rsday|urday|rs|s)?\b/);
+  if (m) {
+    const target = WEEKDAYS[m[1]];
+    let ahead = (target - now.getDay() + 7) % 7;
+    if (ahead === 0) ahead = 7;
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + ahead, 23, 59, 0, 0);
+    return d.toISOString();
   }
 
   // Relative words.
@@ -149,20 +163,26 @@ function matchSubject(text: string, subjects: UserSubject[]): UserSubject | null
 // cleanly, fall back to the trimmed input if stripping empties it.
 function deriveTitle(text: string): string {
   let t = text
-    .replace(/\bdue\b.*$/i, "")
+    // "due ..." to the end is deadline noise; also when glued to the next
+    // word ("dueTuesday", "due15 Aug").
+    .replace(/\bdue(?:\b|(?=\d)|(?=(?:mon|tue|wed|thu|fri|sat|sun|tomorrow|today|next)))[\s\S]*$/i, "")
     .replace(/\bby\b\s+\d.*$/i, "")
     .replace(/\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m)\b/gi, "")
     .replace(/\b(urgent|asap|whenever|no rush|next week|tomorrow|tonight|today)\b/gi, "")
+    // Separators left behind by removed words: "ASR homework, , " -> "ASR homework".
+    .replace(/\s*,(\s*,)+/g, ",")
     .replace(/\s{2,}/g, " ")
     .replace(/[\s,.;:-]+$/g, "")
+    // A preposition left dangling by a removed duration: "Study X for".
+    .replace(/\s+(?:for|about|around)$/i, "")
     .trim();
   if (!t) t = text.trim();
   // Capitalise first letter for presentation.
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-// The deterministic rule-based parser. Always succeeds.
-function ruleParse(
+// The deterministic rule-based parser. Always succeeds. Exported for tests.
+export function ruleParse(
   text: string,
   subjects: UserSubject[],
   now: Date,

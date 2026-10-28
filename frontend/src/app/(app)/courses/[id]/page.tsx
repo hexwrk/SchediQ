@@ -1,8 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { use, useCallback, useEffect, useState } from "react";
-import { ApiError, CourseDetail, Subject, coursesApi, subjectsApi } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { use, useState } from "react";
+import { coursesApi, subjectsApi } from "@/lib/api";
+import { ErrorState, LoadingState } from "@/lib/states";
+import { errorMessage, useApi } from "@/lib/use-api";
 import { useAuth } from "@/lib/auth-context";
 import { LevelPill, ProgressBar } from "@/lib/ui";
 
@@ -11,26 +14,17 @@ import { LevelPill, ProgressBar } from "@/lib/ui";
 export default function CoursePage({ params }: PageProps<"/courses/[id]">) {
   const { id } = use(params);
   const { token } = useAuth();
-  const [course, setCourse] = useState<CourseDetail | null>(null);
-  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const router = useRouter();
+  const { data, error: loadError, loading, reload, reloading } = useApi(`course:${id}`, async (t) => {
+    const [c, s] = await Promise.all([coursesApi.get(t, id), subjectsApi.list(t)]);
+    return { course: c.course, subjects: s.subjects };
+  });
+  const course = data?.course ?? null;
+  const subjects = data?.subjects ?? [];
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    if (!token) return;
-    try {
-      const [c, s] = await Promise.all([coursesApi.get(token, id), subjectsApi.list(token)]);
-      setCourse(c.course);
-      setSubjects(s.subjects);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to load course");
-    }
-  }, [token, id]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const load = reload;
 
   async function link(subjectId: string) {
     if (!token || !course) return;
@@ -40,7 +34,7 @@ export default function CoursePage({ params }: PageProps<"/courses/[id]">) {
       await load();
       setNotice(subjectId ? "Linked: this course now counts toward that subject's mastery." : "Unlinked from subject.");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to link subject");
+      setError(errorMessage(err, "Failed to link subject"));
     }
   }
 
@@ -55,14 +49,33 @@ export default function CoursePage({ params }: PageProps<"/courses/[id]">) {
         `${tasksCreated} lesson task${tasksCreated === 1 ? "" : "s"} added. Regenerate your schedule on the Dashboard to place them.`
       );
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to add to schedule");
+      setError(errorMessage(err, "Failed to add to schedule"));
     } finally {
       setBusy(false);
     }
   }
 
-  if (error && !course) return <p className="text-sm text-red-600">{error}</p>;
-  if (!course) return <p className="text-sm text-text-muted">Loading course...</p>;
+  async function removeCourse() {
+    if (!token || !course) return;
+    if (!window.confirm(`Delete "${course.title}"? All ${course.lessons.length} lessons and quiz scores are deleted, and the XP they earned is removed.`)) return;
+    try {
+      await coursesApi.remove(token, course.id);
+      router.push("/courses");
+    } catch (err) {
+      setError(errorMessage(err, "Failed to delete the course"));
+    }
+  }
+
+  if (loading) return <LoadingState label="Loading course" />;
+  if (!course)
+    return (
+      <ErrorState
+        title="Couldn't open this course"
+        message={loadError ?? "Course not found."}
+        onRetry={reload}
+        retrying={reloading}
+      />
+    );
 
   const { progress } = course;
   const next = course.lessons.find((l) => !l.completedAt);
@@ -139,6 +152,9 @@ export default function CoursePage({ params }: PageProps<"/courses/[id]">) {
             title="Creates one study task per unfinished lesson"
           >
             {course.scheduledAt ? "On your schedule" : busy ? "Adding..." : "Add this course to my schedule"}
+          </button>
+          <button onClick={removeCourse} className="ml-auto text-sm text-red-600 hover:underline">
+            Delete course
           </button>
         </div>
         {notice && <p className="text-sm text-accent">{notice}</p>}

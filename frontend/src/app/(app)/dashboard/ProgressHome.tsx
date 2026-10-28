@@ -36,7 +36,9 @@ export default function ProgressHome({ overview }: { overview: Overview }) {
         />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+      {/* items-start: each card keeps its own height instead of stretching to
+          the tallest one (which left a large empty block on wide screens). */}
+      <div className="grid items-start gap-4 lg:grid-cols-[1.2fr_1fr]">
         {/* Subject mastery */}
         <div className="rounded-card border border-border bg-surface p-5">
           <div className="mb-3 flex items-center justify-between">
@@ -151,22 +153,19 @@ function Stat({
   );
 }
 
-// 14-day bar chart, inline SVG (no chart library). Toggles between XP and study
-// minutes; each bar has a native tooltip with the exact value.
+// 14-day bar chart. Bars are HTML flex items with percentage heights inside a
+// fixed-height box, so the chart keeps the same proportions and label size at
+// every screen width (an SVG viewBox would scale its text up on wide screens).
 function Trend({ trend }: { trend: Overview["trend"] }) {
   const [metric, setMetric] = useState<"xp" | "studyMinutes">("xp");
   const values = trend.map((t) => t[metric]);
   const max = Math.max(1, ...values);
-  const W = 280;
-  const H = 80;
-  const gap = 4;
-  const bw = (W - gap * (trend.length - 1)) / trend.length;
   const total = values.reduce((a, b) => a + b, 0);
   const unit = metric === "xp" ? "XP" : "min";
 
   return (
     <div className="rounded-card border border-border bg-surface p-5">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold">Last 14 days</h2>
         <div className="flex rounded-lg bg-bg p-0.5 text-xs">
           {(["xp", "studyMinutes"] as const).map((m) => (
@@ -180,41 +179,28 @@ function Trend({ trend }: { trend: Overview["trend"] }) {
           ))}
         </div>
       </div>
-      <svg viewBox={`0 0 ${W} ${H + 14}`} className="w-full" role="img" aria-label={`${unit} per day, last 14 days`}>
-        <line x1={0} y1={H} x2={W} y2={H} stroke="var(--border)" />
+      <div
+        className="flex h-24 items-end gap-1 border-b border-border"
+        role="img"
+        aria-label={`${unit} per day over the last 14 days, ${total} in total`}
+      >
         {trend.map((t, i) => {
           const v = t[metric];
-          const h = v === 0 ? 0 : Math.max(2, (v / max) * (H - 4));
-          const x = i * (bw + gap);
           const isToday = i === trend.length - 1;
           return (
-            <g key={t.date}>
-              <rect
-                x={x}
-                y={H - h}
-                width={bw}
-                height={h}
-                rx={2}
-                fill={isToday ? "var(--accent)" : "var(--primary)"}
-                opacity={isToday ? 1 : 0.75}
-              >
-                <title>{`${t.date}: ${v} ${unit}`}</title>
-              </rect>
-              {(i === 0 || isToday) && (
-                <text
-                  x={isToday ? x + bw : x}
-                  y={H + 12}
-                  fontSize="9"
-                  textAnchor={isToday ? "end" : "start"}
-                  fill="var(--text-muted)"
-                >
-                  {isToday ? "today" : t.date.slice(5)}
-                </text>
-              )}
-            </g>
+            <div
+              key={t.date}
+              title={`${t.date}: ${v} ${unit}`}
+              className={`flex-1 rounded-t-sm ${isToday ? "bg-accent" : "bg-primary/75"}`}
+              style={{ height: v === 0 ? 0 : `${Math.max(4, (v / max) * 100)}%` }}
+            />
           );
         })}
-      </svg>
+      </div>
+      <div className="mt-1 flex justify-between text-[10px] text-text-muted">
+        <span>{trend[0]?.date.slice(5)}</span>
+        <span>today</span>
+      </div>
       <p className="mt-1 text-xs text-text-muted">
         {total} {unit} over 14 days
       </p>

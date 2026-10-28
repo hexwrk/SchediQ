@@ -156,6 +156,9 @@ async function main() {
     { title: "Deadlock & concurrency problem set", subject: "Operating Systems", deadline: inDays(9), durationMin: 90, priority: "MEDIUM" },
     { title: "Memory management flashcards", subject: "Operating Systems", deadline: inDays(14), durationMin: 45, priority: "LOW" },
     { title: "OS midterm exam prep", subject: "Operating Systems", deadline: inDays(16), durationMin: 240, priority: "HIGH" },
+    // Deliberately overdue: shows the dashboard's "needs attention" panel. The
+    // scheduler places it as soon as possible and flags it OVERDUE.
+    { title: "Networking lab report (late)", subject: "Networking", deadline: inDays(-1), durationMin: 60, priority: "HIGH" },
   ];
 
   const created: Record<string, string> = {}; // title -> taskId

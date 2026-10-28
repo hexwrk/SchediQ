@@ -1,18 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { AccessDenied } from "@/lib/access-denied";
-import { AccountType, AdminUser, ApiError, Role, adminApi } from "@/lib/api";
+import { AccountType, AdminUser, Role, adminApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { FieldError, inputClass } from "@/lib/form";
+import { EmptyState, ErrorState, LoadingState } from "@/lib/states";
+import { errorMessage, useApi } from "@/lib/use-api";
 
 // Super admin: every account, with role/tier controls and delete. All changes
 // go through /api/admin/users, which the server gates with requireSuperAdmin.
 export default function AdminUsersPage() {
   const { token, user: me } = useAuth();
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [forbidden, setForbidden] = useState(false);
+  const { data, error: loadError, errorStatus, loading, reload, reloading } = useApi("admin-users", (t) =>
+    adminApi.users(t).then((r) => r.users)
+  );
+  const users: AdminUser[] = data ?? [];
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
@@ -21,22 +24,7 @@ export default function AdminUsersPage() {
   const [confirmText, setConfirmText] = useState("");
   const [confirmError, setConfirmError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    if (!token) return;
-    try {
-      const res = await adminApi.users(token);
-      setUsers(res.users);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 403) setForbidden(true);
-      else setError(err instanceof ApiError ? err.message : "Failed to load users");
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const load = reload;
 
   async function update(u: AdminUser, data: { role?: Role; accountType?: AccountType }) {
     if (!token) return;
@@ -47,7 +35,7 @@ export default function AdminUsersPage() {
       setNotice(`Updated ${u.email}.`);
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Update failed");
+      setError(errorMessage(err, "Update failed"));
     }
   }
 
@@ -65,12 +53,13 @@ export default function AdminUsersPage() {
       setConfirmError(null);
       await load();
     } catch (err) {
-      setConfirmError(err instanceof ApiError ? err.message : "Delete failed");
+      setConfirmError(errorMessage(err, "Delete failed"));
     }
   }
 
-  if (forbidden) return <AccessDenied />;
-  if (loading) return <p className="text-sm text-text-muted">Loading users...</p>;
+  if (errorStatus === 403) return <AccessDenied />;
+  if (loading) return <LoadingState label="Loading users" />;
+  if (loadError && !data) return <ErrorState message={loadError} onRetry={reload} retrying={reloading} />;
 
   const q = filter.trim().toLowerCase();
   const shown = q ? users.filter((u) => u.email.toLowerCase().includes(q) || u.name.toLowerCase().includes(q)) : users;
@@ -106,6 +95,13 @@ export default function AdminUsersPage() {
             </tr>
           </thead>
           <tbody>
+            {shown.length === 0 && (
+              <tr>
+                <td colSpan={8} className="p-4">
+                  <EmptyState title="No matching accounts" body={`Nothing matches "${filter}". Clear the filter to see everyone.`} onAction={() => setFilter("")} actionLabel="Clear filter" />
+                </td>
+              </tr>
+            )}
             {shown.map((u) => {
               const self = u.id === me?.id;
               return (

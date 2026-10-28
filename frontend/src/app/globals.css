@@ -48,6 +48,12 @@ body {
   body {
     background: #ffffff;
   }
+  /* Browsers drop background colours when printing by default, which would
+     print empty chart bars and progress tracks. Keep them. */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
   @page {
     margin: 16mm;
   }

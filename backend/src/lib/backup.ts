@@ -100,6 +100,9 @@ async function pgDump(conn: PgConn): Promise<Buffer> {
 // Table export order = dependency order (parents first). Restore inserts in
 // this order and deletes in reverse, so foreign keys are always satisfied.
 // Task comes after lesson because Task.lessonId references Lesson.
+// PasswordResetToken is deliberately NOT exported: live reset secrets do not
+// belong in a backup, and they expire in 30 minutes anyway. A restore removes
+// them with their users (onDelete: Cascade), which invalidates pending links.
 const TABLES = [
   "user",
   "preference",

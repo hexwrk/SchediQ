@@ -1,10 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { FREE_AI_PARSES_PER_DAY, FREE_COURSE_LIMIT } from "@shared/validation";
 import { AccountType, ApiError, Usage, accountApi, coursesApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { StarIcon } from "@/lib/icons";
+import { ErrorState } from "@/lib/states";
+import { useApi } from "@/lib/use-api";
+
+async function loadUsage(token: string): Promise<{ parses: Usage; courses: Usage }> {
+  const [a, c] = await Promise.all([accountApi.get(token), coursesApi.list(token)]);
+  return { parses: a.usage.aiParses, courses: c.usage };
+}
 
 // Free vs Premium comparison with a DEMO upgrade button. There is no payment:
 // the button flips the account tier via PATCH /api/account/tier so the gated
@@ -20,21 +27,12 @@ const ROWS: { feature: string; free: string; premium: string }[] = [
 
 export default function UpgradePage() {
   const { token, user, setUser } = useAuth();
-  const [parses, setParses] = useState<Usage | null>(null);
-  const [courses, setCourses] = useState<Usage | null>(null);
+  const usageQuery = useApi("plan-usage", loadUsage);
+  const parses = usageQuery.data?.parses ?? null;
+  const courses = usageQuery.data?.courses ?? null;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!token) return;
-    Promise.all([accountApi.get(token), coursesApi.list(token)])
-      .then(([a, c]) => {
-        setParses(a.usage.aiParses);
-        setCourses(c.usage);
-      })
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Failed to load your plan"));
-  }, [token]);
 
   async function switchTo(tier: AccountType) {
     if (!token) return;
@@ -44,9 +42,7 @@ export default function UpgradePage() {
     try {
       const res = await accountApi.setTier(token, tier);
       setUser(res.user);
-      setParses(res.usage.aiParses);
-      const c = await coursesApi.list(token);
-      setCourses(c.usage);
+      await usageQuery.reload();
       setMessage(tier === "PREMIUM" ? "You're on Premium (demo). Limits are lifted." : "Switched back to the Free plan.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not change plan");
@@ -105,6 +101,9 @@ export default function UpgradePage() {
 
       <div className="flex flex-col gap-3 rounded-card border border-border bg-surface p-5">
         <h2 className="text-sm font-semibold">Your usage</h2>
+        {usageQuery.error && (
+          <ErrorState message={usageQuery.error} onRetry={usageQuery.reload} retrying={usageQuery.reloading} />
+        )}
         <p className="text-sm text-text-muted">
           AI parses today:{" "}
           <span className="font-medium text-text">

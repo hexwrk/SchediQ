@@ -84,6 +84,9 @@ export default function LoginPage() {
             className={inputClass(errors.password)}
           />
           <FieldError message={errors.password} />
+          <Link href="/forgot-password" className="self-end text-xs text-primary hover:underline">
+            Forgot password?
+          </Link>
         </label>
 
         {error && <p className="text-sm text-red-600">{error}</p>}

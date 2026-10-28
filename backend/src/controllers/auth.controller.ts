@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
@@ -96,4 +97,95 @@ export async function me(req: Request, res: Response) {
     return res.status(404).json({ error: "User not found" });
   }
   return res.json({ user: toPublicUser(user) });
+}
+
+// ---------- Forgot / reset password ----------
+
+// Reset links expire quickly: long enough to switch to the inbox, short enough
+// that a link left in an old email is useless.
+const RESET_TTL_MIN = 30;
+
+const forgotSchema = z.object({
+  email: z.string().trim().min(1, "Email is required.").max(254).transform((v) => v.toLowerCase()),
+});
+
+const resetSchema = z.object({
+  token: z.string().min(20, "This reset link is invalid.").max(200),
+  password: passwordField,
+});
+
+// SHA-256 of the raw token. The raw token only ever exists in the link; the DB
+// stores the hash, so a DB leak cannot be turned into working reset links.
+// A fast hash is fine here (unlike passwords) because the token is 256 random
+// bits: there is nothing to brute-force.
+function hashToken(raw: string): string {
+  return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
+// DEMO MODE: there is no email service, so the reset link is returned in the
+// response and logged to the API console. On by default outside production;
+// RESET_DEMO_MODE=false turns it off (the link is then only logged).
+function demoMode(): boolean {
+  return (process.env.RESET_DEMO_MODE ?? (process.env.NODE_ENV === "production" ? "false" : "true")) === "true";
+}
+
+const GENERIC_FORGOT = "If an account exists for that email, a reset link has been sent.";
+
+// POST /api/auth/forgot
+export async function forgotPassword(req: Request, res: Response) {
+  const { email } = forgotSchema.parse(req.body);
+  const user = await prisma.user.findFirst({
+    where: { email: { equals: email, mode: "insensitive" } },
+  });
+  // Same response whether or not the account exists (no enumeration), except
+  // for the demo link itself.
+  if (!user) {
+    return res.json({ message: GENERIC_FORGOT });
+  }
+
+  const raw = crypto.randomBytes(32).toString("base64url");
+  await prisma.$transaction([
+    // A new request invalidates any older unused links for this account.
+    prisma.passwordResetToken.updateMany({
+      where: { userId: user.id, usedAt: null },
+      data: { usedAt: new Date() },
+    }),
+    prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: hashToken(raw),
+        expiresAt: new Date(Date.now() + RESET_TTL_MIN * 60 * 1000),
+      },
+    }),
+  ]);
+
+  const appUrl = process.env.APP_URL ?? process.env.CORS_ORIGIN ?? "http://localhost:3000";
+  const resetUrl = `${appUrl.replace(/\/$/, "")}/reset-password?token=${raw}`;
+  console.log(`[demo mail] Password reset for ${user.email}: ${resetUrl}`);
+
+  return res.json(
+    demoMode()
+      ? { message: GENERIC_FORGOT, demo: true, resetUrl, expiresInMinutes: RESET_TTL_MIN }
+      : { message: GENERIC_FORGOT }
+  );
+}
+
+// POST /api/auth/reset
+export async function resetPassword(req: Request, res: Response) {
+  const { token, password } = resetSchema.parse(req.body);
+  const record = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(token) } });
+  if (!record || record.usedAt || record.expiresAt.getTime() < Date.now()) {
+    return res.status(400).json({ error: "This reset link is invalid or has expired. Request a new one." });
+  }
+
+  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: record.userId }, data: { passwordHash } }),
+    // Burn this token and any other outstanding ones for the account.
+    prisma.passwordResetToken.updateMany({
+      where: { userId: record.userId, usedAt: null },
+      data: { usedAt: new Date() },
+    }),
+  ]);
+  return res.json({ message: "Password updated. You can now log in with your new password." });
 }

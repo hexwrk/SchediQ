@@ -1,11 +1,13 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { AccessDenied } from "@/lib/access-denied";
-import { AdminStats, ApiError, adminApi } from "@/lib/api";
+import { adminApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { FieldError, inputClass } from "@/lib/form";
 import { DatabaseIcon } from "@/lib/icons";
+import { ErrorState, LoadingState } from "@/lib/states";
+import { errorMessage, useApi } from "@/lib/use-api";
 
 // Super admin System page: live counts, database size, and BACKUP / RESTORE
 // driven entirely from buttons (no terminal).
@@ -24,8 +26,7 @@ function formatBytes(n: number): string {
 
 export default function SystemPage() {
   const { token } = useAuth();
-  const [stats, setStats] = useState<AdminStats | null>(null);
-  const [forbidden, setForbidden] = useState(false);
+  const { data: stats, error: loadError, errorStatus, loading, reload, reloading } = useApi("admin-stats", adminApi.stats);
   const [error, setError] = useState<string | null>(null);
   const [backingUp, setBackingUp] = useState(false);
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
@@ -38,19 +39,7 @@ export default function SystemPage() {
   const [restoreMsg, setRestoreMsg] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    if (!token) return;
-    try {
-      setStats(await adminApi.stats(token));
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 403) setForbidden(true);
-      else setError(err instanceof ApiError ? err.message : "Failed to load stats");
-    }
-  }, [token]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const load = reload;
 
   async function createBackup() {
     if (!token) return;
@@ -74,7 +63,7 @@ export default function SystemPage() {
       );
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Backup failed");
+      setError(errorMessage(err, "Backup failed"));
     } finally {
       setBackingUp(false);
     }
@@ -105,15 +94,15 @@ export default function SystemPage() {
       if (fileRef.current) fileRef.current.value = "";
       await load();
     } catch (err) {
-      setRestoreError(err instanceof ApiError ? err.message : "Restore failed");
+      setRestoreError(errorMessage(err, "Restore failed"));
     } finally {
       setRestoring(false);
     }
   }
 
-  if (forbidden) return <AccessDenied />;
-  if (error && !stats) return <p className="text-sm text-red-600">{error}</p>;
-  if (!stats) return <p className="text-sm text-text-muted">Loading system stats...</p>;
+  if (errorStatus === 403) return <AccessDenied />;
+  if (loading) return <LoadingState label="Loading system stats" rows={2} />;
+  if (!stats) return <ErrorState message={loadError ?? "Stats unavailable."} onRetry={reload} retrying={reloading} />;
 
   return (
     <div className="flex max-w-5xl flex-col gap-6">

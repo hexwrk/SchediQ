@@ -2,13 +2,19 @@
 
 import { useProgress } from "@/lib/progress-context";
 import { FlameIcon, TrophyIcon } from "@/lib/icons";
+import { ErrorState, LoadingState } from "@/lib/states";
 
 export default function ProgressPage() {
-  const { progress, loading } = useProgress();
+  const { progress, loading, refresh } = useProgress();
 
-  if (loading || !progress) {
-    return <p className="text-sm text-text-muted">Loading progress...</p>;
-  }
+  if (loading) return <LoadingState label="Loading progress" rows={3} />;
+  if (!progress)
+    return (
+      <ErrorState
+        message="Your progress could not be loaded. Your XP is safe: it is recalculated from your saved work."
+        onRetry={() => void refresh()}
+      />
+    );
 
   const { levelProgress, streak, badges, leaderboard, rank, totalUsers } = progress;
   const pct =

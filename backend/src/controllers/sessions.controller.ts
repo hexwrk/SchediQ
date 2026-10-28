@@ -1,18 +1,55 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
-import { buildSchedule, SchedulerTask, SchedulerPrefs } from "../lib/scheduler";
+import {
+  buildSchedule,
+  scheduleIssues,
+  ScheduleIssue,
+  SchedulerTask,
+  SchedulerPrefs,
+} from "../lib/scheduler";
+
+// No preferences row yet = scheduler defaults. Upserting (rather than reading)
+// means every later read sees the same defaults the scheduler used.
+async function prefsFor(userId: string): Promise<SchedulerPrefs> {
+  const p = await prisma.preference.upsert({ where: { userId }, update: {}, create: { userId } });
+  return {
+    maxDailyMins: p.maxDailyMins,
+    preferredStart: p.preferredStart,
+    preferredEnd: p.preferredEnd,
+    breakMins: p.breakMins,
+    clustering: p.clustering,
+  };
+}
+
+// Recompute issues from what is stored right now (see scheduleIssues).
+async function issuesFor(userId: string, prefs: SchedulerPrefs): Promise<ScheduleIssue[]> {
+  const [tasks, sessions] = await Promise.all([
+    prisma.task.findMany({
+      where: { userId },
+      select: { id: true, title: true, deadline: true, durationMin: true, status: true, updatedAt: true },
+    }),
+    prisma.studySession.findMany({
+      where: { task: { userId } },
+      select: { taskId: true, startsAt: true, endsAt: true, createdAt: true },
+    }),
+  ]);
+  return scheduleIssues(tasks, sessions, prefs, new Date());
+}
 
 // GET /api/sessions
 // Return the user's planned sessions ordered by start time, each with its task
-// and that task's subject so the calendar can colour blocks by subject.
+// and that task's subject so the calendar can colour blocks by subject, plus
+// any schedule issues (overdue / at risk / unschedulable) with reasons.
 export async function listSessions(req: Request, res: Response) {
+  const userId = req.userId as string;
   const sessions = await prisma.studySession.findMany({
-    where: { task: { userId: req.userId } },
+    where: { task: { userId } },
     orderBy: { startsAt: "asc" },
     include: { task: { include: { subject: true } } },
   });
-  return res.json({ sessions });
+  const issues = await issuesFor(userId, await prefsFor(userId));
+  return res.json({ sessions, issues });
 }
 
 // POST /api/sessions/generate
@@ -24,26 +61,14 @@ export async function listSessions(req: Request, res: Response) {
 export async function generateSchedule(req: Request, res: Response) {
   const userId = req.userId as string;
 
-  // Upsert default preferences if the user has none yet, mirroring the
-  // preferences controller so generate works for a brand-new account.
-  const preference = await prisma.preference.upsert({
-    where: { userId },
-    update: {},
-    create: { userId },
-  });
+  // Defaults are created if the user has none yet, so generate works for a
+  // brand-new account.
+  const prefs = await prefsFor(userId);
 
   const tasks = await prisma.task.findMany({
     where: { userId },
     include: { subject: true },
   });
-
-  const prefs: SchedulerPrefs = {
-    maxDailyMins: preference.maxDailyMins,
-    preferredStart: preference.preferredStart,
-    preferredEnd: preference.preferredEnd,
-    breakMins: preference.breakMins,
-    clustering: preference.clustering,
-  };
 
   // The controller supplies the clock; the scheduler itself stays pure.
   const planned = buildSchedule(tasks as unknown as SchedulerTask[], prefs, {
@@ -86,7 +111,7 @@ export async function generateSchedule(req: Request, res: Response) {
     });
   });
 
-  return res.json({ sessions });
+  return res.json({ sessions, issues: await issuesFor(userId, prefs) });
 }
 
 const toggleSchema = z.object({ completed: z.boolean() });
@@ -126,6 +151,17 @@ export async function toggleSession(req: Request, res: Response) {
       where: { id: existing.taskId },
       data: { status: allDone ? "DONE" : "SCHEDULED" },
     });
+
+    // One progress system: finishing every block of a lesson-linked task
+    // completes the lesson too (lesson XP and course progress follow). Undoing
+    // a block does NOT un-complete the lesson, since the lesson may also have
+    // been completed directly or by passing its quiz.
+    if (allDone && existing.task.lessonId) {
+      await tx.lesson.updateMany({
+        where: { id: existing.task.lessonId, completedAt: null },
+        data: { completedAt: new Date() },
+      });
+    }
 
     return tx.studySession.findFirst({
       where: { id: existing.id },
