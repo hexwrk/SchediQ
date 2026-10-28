@@ -173,9 +173,14 @@ export async function restoreHandler(req: Request, res: Response) {
 
   // Captured before the restore: the admin's own row may not exist afterwards.
   const actor = await actorEmail(req.userId);
+  // The audit trail must outlive a restore. The backup file only holds the log
+  // as it was when the dump ran (never its own BACKUP entry), so snapshot the
+  // current log and re-insert anything the restore dropped.
+  const auditLog = await prisma.backupLog.findMany();
 
   try {
     const format = await restoreBackup(file.originalname, file.buffer);
+    await prisma.backupLog.createMany({ data: auditLog, skipDuplicates: true });
     await prisma.backupLog.create({
       data: {
         kind: "RESTORE",
