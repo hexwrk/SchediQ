@@ -84,6 +84,17 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Progress-bar fill in a SUBJECT colour (set per bar as --fill). Raw subject
+   swatches are as low as 2.7:1 against the bar track, so the fill is darkened
+   in light mode and lightened in dark mode by the smallest amount that takes
+   every swatch to >= 4.5:1 against the track while keeping its hue. */
+.subject-fill {
+  background: color-mix(in srgb, var(--fill) 75%, #000000);
+}
+:root[data-theme="dark"] .subject-fill {
+  background: color-mix(in srgb, var(--fill) 80%, #ffffff);
+}
+
 /* Print: reports render as plain light documents on white paper, whatever
    theme is on screen (dark ink-on-black pages would be unreadable and waste
    toner). Re-declares the light palette over the dark one. */
@@ -112,6 +123,9 @@ body {
   }
   body {
     background: #ffffff;
+  }
+  :root[data-theme="dark"] .subject-fill {
+    background: color-mix(in srgb, var(--fill) 75%, #000000);
   }
   /* Browsers drop background colours when printing by default, which would
      print empty chart bars and progress tracks. Keep them. */

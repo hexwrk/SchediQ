@@ -91,6 +91,23 @@ describe("scheduler: placement rules", () => {
     }
   });
 
+  it("keeps placing IN_PROGRESS tasks (the caller passes the remaining minutes)", () => {
+    const out = buildSchedule([task({ durationMin: 100, status: "IN_PROGRESS" })], DEFAULT_PREFS, { now: NOW });
+    assert.equal(out.reduce((s, x) => s + mins(x), 0), 100);
+  });
+
+  it("never overlaps kept (completed) blocks, and counts them toward the daily limit", () => {
+    // A 50-min block finished early: it sits 14:30-15:20 today.
+    const busy = [{ startsAt: new Date(2026, 9, 28, 14, 30), endsAt: new Date(2026, 9, 28, 15, 20) }];
+    const out = buildSchedule([task({ durationMin: 150, deadline: day(0, 23, 0) })], DEFAULT_PREFS, { now: NOW, busy });
+    for (const s of out) {
+      const overlaps = s.startsAt < busy[0].endsAt && s.endsAt > busy[0].startsAt;
+      assert.ok(!overlaps, `block ${s.startsAt.toTimeString()} overlaps the kept block`);
+    }
+    const today = out.filter((s) => dayKey(s.startsAt) === dayKey(NOW)).reduce((a, s) => a + mins(s), 0);
+    assert.ok(today + 50 <= DEFAULT_PREFS.maxDailyMins, `today ${today}+50 exceeds the daily limit`);
+  });
+
   it("skips DONE tasks", () => {
     const out = buildSchedule([task({ durationMin: 60, status: "DONE" })], DEFAULT_PREFS, { now: NOW });
     assert.equal(out.length, 0);

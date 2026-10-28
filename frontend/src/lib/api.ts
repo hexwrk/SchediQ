@@ -130,7 +130,17 @@ export const authApi = {
 };
 
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH";
-export type TaskStatus = "PENDING" | "SCHEDULED" | "DONE";
+export type TaskStatus = "PENDING" | "SCHEDULED" | "IN_PROGRESS" | "DONE";
+
+// Derived server-side from the task's study sessions (single source of truth).
+export interface TaskProgress {
+  totalMin: number;
+  completedMin: number;
+  percent: number;
+  sessionsTotal: number;
+  sessionsDone: number;
+  nextSessionAt: string | null;
+}
 
 export interface Subject {
   id: string;
@@ -149,6 +159,7 @@ export interface Task {
   status: TaskStatus;
   subjectId: string | null;
   subject: Subject | null;
+  progress: TaskProgress;
 }
 
 export interface TaskInput {

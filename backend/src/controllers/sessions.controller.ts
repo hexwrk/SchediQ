@@ -8,6 +8,7 @@ import {
   SchedulerTask,
   SchedulerPrefs,
 } from "../lib/scheduler";
+import { statusFromSessions } from "../lib/taskProgress";
 
 // No preferences row yet = scheduler defaults. Upserting (rather than reading)
 // means every later read sees the same defaults the scheduler used.
@@ -67,15 +68,34 @@ export async function generateSchedule(req: Request, res: Response) {
 
   const rows = await prisma.task.findMany({
     where: { userId },
-    include: { subject: true, lesson: { select: { courseId: true } } },
+    include: {
+      subject: true,
+      lesson: { select: { courseId: true } },
+      sessions: { where: { completedAt: { not: null } }, select: { startsAt: true, endsAt: true } },
+    },
   });
   // Lesson tasks carry their course id so the scheduler can pace each course
   // (MAX_LESSONS_PER_DAY) instead of spreading them like ordinary tasks.
-  const tasks = rows.map((t) => ({ ...t, courseId: t.lesson?.courseId ?? null }));
+  // Plan only the REMAINING minutes. Completed sessions are kept as history,
+  // so planning the full duration again would double-count finished work (a
+  // task 1/3 done would get 3 fresh blocks and its progress would drop).
+  const tasks = rows.map((t) => {
+    const doneMin = t.sessions.reduce(
+      (sum, s) => sum + Math.round((s.endsAt.getTime() - s.startsAt.getTime()) / 60000),
+      0
+    );
+    return { ...t, durationMin: Math.max(0, t.durationMin - doneMin), courseId: t.lesson?.courseId ?? null };
+  });
 
   // The controller supplies the clock; the scheduler itself stays pure.
+  // Completed sessions from today on stay on the calendar, so the new plan
+  // must work around them (e.g. a block finished early).
+  const now = new Date();
+  const busy = rows.flatMap((t) => t.sessions).filter((x) => x.endsAt.getTime() >= new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime());
+
   const planned = buildSchedule(tasks as unknown as SchedulerTask[], prefs, {
-    now: new Date(),
+    now,
+    busy,
   });
 
   // Tasks that actually received at least one block become SCHEDULED.
@@ -102,7 +122,8 @@ export async function generateSchedule(req: Request, res: Response) {
     // Flip placed tasks to SCHEDULED without touching DONE tasks.
     if (scheduledTaskIds.length > 0) {
       await tx.task.updateMany({
-        where: { id: { in: scheduledTaskIds }, userId, status: { not: "DONE" } },
+        // IN_PROGRESS keeps its status: it already has completed work.
+        where: { id: { in: scheduledTaskIds }, userId, status: { in: ["PENDING", "SCHEDULED"] } },
         data: { status: "SCHEDULED" },
       });
     }
@@ -148,11 +169,14 @@ export async function toggleSession(req: Request, res: Response) {
       where: { taskId: existing.taskId },
       select: { completedAt: true },
     });
-    const allDone =
-      siblings.length > 0 && siblings.every((s) => s.completedAt !== null);
+    // Status follows progress (lib/taskProgress.ts): none done -> SCHEDULED,
+    // some -> IN_PROGRESS, all -> DONE.
+    const doneCount = siblings.filter((s) => s.completedAt !== null).length;
+    const status = statusFromSessions(siblings.length, doneCount);
+    const allDone = status === "DONE";
     await tx.task.update({
       where: { id: existing.taskId },
-      data: { status: allDone ? "DONE" : "SCHEDULED" },
+      data: { status },
     });
 
     // One progress system: finishing every block of a lesson-linked task

@@ -7,14 +7,16 @@ import {
   Preference,
   ScheduleIssue,
   StudySession,
+  Task,
   preferencesApi,
   progressApi,
   sessionsApi,
+  tasksApi,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { RefreshIcon } from "@/lib/icons";
 import { EmptyState, ErrorState, LoadingState } from "@/lib/states";
-import { useXpReward } from "@/lib/ui";
+import { TaskProgressLine, useXpReward } from "@/lib/ui";
 import { errorMessage, useApi } from "@/lib/use-api";
 import ProgressHome from "./ProgressHome";
 
@@ -50,17 +52,19 @@ interface DashboardData {
   issues: ScheduleIssue[];
   prefs: Preference;
   overview: Overview;
+  tasks: Task[];
   // Captured when the data loaded, so render stays pure (no Date() in render).
   loadedAt: number;
 }
 
 async function loadDashboard(token: string): Promise<DashboardData> {
-  const [s, p, o] = await Promise.all([
+  const [s, p, o, t] = await Promise.all([
     sessionsApi.list(token),
     preferencesApi.get(token),
     progressApi.overview(token),
+    tasksApi.list(token),
   ]);
-  return { sessions: s.sessions, issues: s.issues, prefs: p.preferences, overview: o, loadedAt: Date.now() };
+  return { sessions: s.sessions, issues: s.issues, prefs: p.preferences, overview: o, tasks: t.tasks, loadedAt: Date.now() };
 }
 
 export default function DashboardPage() {
@@ -104,7 +108,11 @@ export default function DashboardPage() {
   if (error && !data) return <ErrorState message={error} onRetry={reload} retrying={reloading} />;
   if (!data) return null;
 
-  const { sessions, issues, prefs, overview, loadedAt } = data;
+  const { sessions, issues, prefs, overview, tasks, loadedAt } = data;
+  // Started but not finished: front and centre so progress is visible.
+  const inProgress = tasks
+    .filter((t) => t.status !== "DONE" && t.progress.percent > 0 && t.progress.percent < 100)
+    .sort((a, b) => b.progress.percent - a.progress.percent);
   const { counts } = overview;
   const today = new Date(loadedAt);
   const days = weekFrom(today);
@@ -149,6 +157,8 @@ export default function DashboardPage() {
 
       {hasProgress && <ProgressHome overview={overview} />}
 
+      {inProgress.length > 0 && <InProgressPanel tasks={inProgress} />}
+
       {issues.length > 0 && <IssuesPanel issues={issues} />}
 
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-6">
@@ -185,6 +195,36 @@ export default function DashboardPage() {
         <WeekCalendar days={days} byDay={byDay} maxDaily={prefs.maxDailyMins} onToggle={toggleBlock} />
       )}
     </div>
+  );
+}
+
+// Tasks with some but not all study sessions completed. Same card language as
+// "Active courses" on the progress home, so task and course progress read alike.
+function InProgressPanel({ tasks }: { tasks: Task[] }) {
+  const shown = tasks.slice(0, 6);
+  return (
+    <section className="rounded-card border border-border bg-surface p-5" aria-labelledby="in-progress-heading">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 id="in-progress-heading" className="text-sm font-semibold">
+          In progress ({tasks.length})
+        </h2>
+        <Link href="/tasks" className="text-xs text-primary hover:underline">
+          {tasks.length > shown.length ? `All ${tasks.length} in Task list` : "Task list"}
+        </Link>
+      </div>
+      <ul className="grid gap-x-6 gap-y-4 md:grid-cols-2">
+        {shown.map((t) => (
+          <li key={t.id} className="flex min-w-0 flex-col gap-1.5">
+            <span className="flex min-w-0 items-center gap-2 text-sm">
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: t.subject?.colorTag ?? "#6366F1" }} />
+              <span className="truncate font-medium">{t.title}</span>
+              <span className="ml-auto shrink-0 text-xs font-semibold">{t.progress.percent}%</span>
+            </span>
+            <TaskProgressLine task={t} />
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

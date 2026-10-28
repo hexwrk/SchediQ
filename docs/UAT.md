@@ -35,6 +35,7 @@ step number.
 | 26 | Spread, not front-load | Add one 360-min task due in 7 days (nothing else), generate | About 45 min on each day up to the deadline; no day full while later days sit empty |
 | 27 | Course pacing | "Add this course to my schedule" on a 5-lesson course, regenerate | One lesson of that course per day, across 5 days |
 | 28 | Dark mode | Top-bar theme button: Light, then Dark, then System; reload; navigate; print a report in Dark | Theme switches instantly, survives reload and navigation, no light flash on load; text readable everywhere; printout is light |
+| 29 | Task progress | Add a 150-min task due in 2 days, generate (3 blocks), tick the blocks one by one on the calendar; regenerate after the first | Bar reads 33% -> 67% -> 100% and the task shows done; "In progress" panel updates without reloading; regenerating keeps 33% and adds no extra blocks |
 
 Automated checks before a demo:
 

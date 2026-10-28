@@ -18,7 +18,7 @@ import {
 } from "@/lib/form";
 import { PlusIcon } from "@/lib/icons";
 import { EmptyState, ErrorState, LoadingState } from "@/lib/states";
-import { useXpReward } from "@/lib/ui";
+import { TaskProgressLine, useXpReward } from "@/lib/ui";
 import { errorMessage, useApi } from "@/lib/use-api";
 
 const PRIORITY_COLOR: Record<TaskPriority, string> = {
@@ -235,17 +235,17 @@ export default function TasksPage() {
             ) : (
               <div
                 key={task.id}
-                className="flex items-center justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3"
+                className="flex items-start justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3"
               >
-                <div className="flex min-w-0 items-center gap-3">
+                <div className="flex min-w-0 flex-1 items-start gap-3">
                   <input
                     type="checkbox"
                     checked={task.status === "DONE"}
                     onChange={() => toggleDone(task)}
                     aria-label={`Mark ${task.title} ${task.status === "DONE" ? "not done" : "done"}`}
-                    className="h-4 w-4 shrink-0 accent-[var(--primary)]"
+                    className="mt-1 h-4 w-4 shrink-0 accent-[var(--primary)]"
                   />
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <p className={`truncate font-medium ${task.status === "DONE" ? "text-text-muted line-through" : ""}`}>
                       {task.title}
                     </p>
@@ -270,7 +270,16 @@ export default function TasksPage() {
                           <span className="text-primary">course lesson</span>
                         </>
                       )}
+                      {task.status === "IN_PROGRESS" && (
+                        <>
+                          <span>·</span>
+                          <span className="font-medium text-primary">in progress</span>
+                        </>
+                      )}
                     </p>
+                    <div className="mt-2 max-w-md">
+                      <TaskProgressLine task={task} />
+                    </div>
                   </div>
                 </div>
                 <div className="flex shrink-0 gap-3 text-sm">

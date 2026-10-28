@@ -105,6 +105,8 @@ enum TaskPriority {
 enum TaskStatus {
   PENDING
   SCHEDULED
+  // At least one of the task's study sessions is complete, but not all.
+  IN_PROGRESS
   DONE
 }
 

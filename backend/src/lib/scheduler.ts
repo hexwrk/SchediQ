@@ -88,6 +88,11 @@ export interface SchedulerOpts {
   // Reference "now". Day packing starts on this calendar day. Supplied by the
   // caller (the controller passes new Date()) so the function stays pure.
   now?: Date;
+  // Blocks that already occupy time and are kept across regenerates (the
+  // completed sessions). New blocks on that day start after the latest busy
+  // block ends, and busy minutes count toward that day's maxDailyMins, so a
+  // block finished early can never be overlapped by the new plan.
+  busy?: { startsAt: Date | string; endsAt: Date | string }[];
 }
 
 export interface PlannedSession {
@@ -127,9 +132,11 @@ export function buildSchedule(
 ): PlannedSession[] {
   const now = opts.now ?? new Date();
 
-  // Rule 1: only PENDING or SCHEDULED tasks are placed; DONE tasks are skipped.
+  // Rule 1: only unfinished tasks are placed (PENDING, SCHEDULED, IN_PROGRESS);
+  // DONE tasks are skipped. For IN_PROGRESS the caller passes the REMAINING
+  // minutes as durationMin.
   const schedulable = tasks.filter(
-    (t) => t.status === "PENDING" || t.status === "SCHEDULED"
+    (t) => t.status === "PENDING" || t.status === "SCHEDULED" || t.status === "IN_PROGRESS"
   );
 
   // Rule 2: stable sort by deadline asc, then priority desc, then id asc.
@@ -172,9 +179,20 @@ export function buildSchedule(
   const blocksFor = (m: number) => Math.ceil(m / MAX_FOCUS_MIN);
 
   const taskUsed: number[] = new Array(HORIZON_DAYS).fill(0); // vs maxDailyMins
-  const windowFree: number[] = Array.from({ length: HORIZON_DAYS }, (_, d) =>
-    Math.max(0, windowEnd - dayStartMin(d))
-  );
+  // Effective start minute per day: after "now" (today) and after any busy block.
+  const startMin: number[] = Array.from({ length: HORIZON_DAYS }, (_, d) => dayStartMin(d));
+  for (const b of opts.busy ?? []) {
+    const start = new Date(b.startsAt);
+    const end = new Date(b.endsAt);
+    const d = Math.round(
+      (new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime() - dayDate(0).getTime()) / 86400000
+    );
+    if (d < 0 || d >= HORIZON_DAYS) continue;
+    taskUsed[d] += Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
+    // + the break that must follow it before the next block.
+    startMin[d] = Math.max(startMin[d], end.getHours() * 60 + end.getMinutes() + prefs.breakMins);
+  }
+  const windowFree: number[] = Array.from({ length: HORIZON_DAYS }, (_, d) => Math.max(0, windowEnd - startMin[d]));
   // Allocation result: per day, the ordered list of (task, minutes).
   const perDay: { task: SchedulerTask; minutes: number }[][] = Array.from({ length: HORIZON_DAYS }, () => []);
   // Lessons already placed per course per day (pacing).
@@ -289,7 +307,7 @@ export function buildSchedule(
         ? clusterBySubject(perDay[d].map((p) => p.task)).map((t) => perDay[d].find((p) => p.task === t)!)
         : perDay[d];
       const date = dayDate(d);
-      let cursor = dayStartMin(d);
+      let cursor = startMin[d];
       let lastCategory: string | null = null;
       for (const { task, minutes } of order) {
         const category = task.subject?.cognitiveCategory ?? "General";

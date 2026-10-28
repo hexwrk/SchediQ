@@ -351,7 +351,37 @@ sees a 3-step onboarding checklist on the dashboard. Unexpected render errors
 are caught by `src/app/(app)/error.tsx` (and `global-error.tsx` for the root),
 and unknown URLs get a friendly 404.
 
-## 18. Dark mode
+## 18. Per-task progress
+
+Every task response (`GET /api/tasks`, `GET /api/tasks/:id`, and create/update)
+carries a `progress` object derived from the task's study sessions in
+`backend/src/lib/taskProgress.ts`:
+
+```
+progress: { totalMin, completedMin, percent, sessionsTotal, sessionsDone, nextSessionAt }
+```
+
+`totalMin` is the sum of the task's session lengths (its `durationMin` when it
+has none yet). `percent` is `round(completedMin / totalMin * 100)`, and 0 with no
+sessions. `nextSessionAt` is the earliest session not yet done. Nothing is
+stored, so a reload always shows what the database holds.
+
+- **Status follows progress** when a session is toggled: no sessions gives
+  `PENDING`, none done gives `SCHEDULED`, some done gives `IN_PROGRESS` (new
+  enum value, migrations `task_in_progress` and `backfill_in_progress`), and all
+  done gives `DONE`. Ticking a task done by hand still marks it `DONE`.
+  Un-ticking re-derives the status from its sessions.
+- **Regenerating keeps progress:** only the task's *remaining* minutes are
+  re-planned. Completed sessions stay, and new blocks never overlap them (they
+  count toward that day's limit).
+- **UI:** the Task list shows a thin bar in the subject's colour with "1 of 3
+  sessions done · 50 / 150 min (33%) · next Thu 09:00". Finished tasks show a
+  full grey bar. The Dashboard's **In progress** panel lists every task between
+  0% and 100%. Ticking a calendar block refetches the dashboard data, so the
+  matching bar moves straight away. Subject-coloured fills are adjusted per
+  theme so every bar keeps at least 4.5:1 against its track in light and dark.
+
+## 19. Dark mode
 
 The theme toggle (sun / moon / monitor icon in the top bar) cycles **Light,
 Dark, System**. System is the default and follows the OS setting live. The

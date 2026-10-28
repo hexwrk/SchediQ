@@ -72,7 +72,7 @@ export default function ProgressHome({ overview }: { overview: Overview }) {
                       <span className="w-10 text-right font-semibold">{m.mastery}%</span>
                     </span>
                   </div>
-                  <ProgressBar value={m.mastery} color={m.colorTag} label={`${m.name} mastery`} />
+                  <ProgressBar value={m.mastery} subjectColor={m.colorTag} label={`${m.name} mastery`} />
                 </li>
               ))}
             </ul>
@@ -110,7 +110,8 @@ export default function ProgressHome({ overview }: { overview: Overview }) {
                         </span>
                         <ProgressBar
                           value={pct}
-                          color={c.completed ? "var(--accent)" : c.subject?.colorTag ?? "var(--primary)"}
+                          color="var(--accent)"
+                          subjectColor={c.completed ? null : c.subject?.colorTag ?? "#6366F1"}
                           label={`${c.title} progress`}
                         />
                       </Link>
