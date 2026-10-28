@@ -17,7 +17,8 @@ export type FieldErrors<K extends string> = Partial<Record<K, string>>;
 // Input styling: red border when the field has an error.
 export function inputClass(error?: string | null, extra = "") {
   return `rounded-lg border bg-surface px-3 py-2 outline-none ${
-    error ? "border-red-500 focus:border-red-600" : "border-border focus:border-primary"
+    // --input (not --border): form fields need >= 3:1 boundary contrast.
+    error ? "border-red-500 focus:border-red-600" : "border-input focus:border-primary"
   } ${extra}`;
 }
 
@@ -67,7 +68,7 @@ export function UpgradePrompt({ message }: { message: string }) {
       </div>
       <Link
         href="/upgrade"
-        className="shrink-0 rounded-lg bg-violet px-4 py-2 text-center text-sm font-medium text-white hover:opacity-90"
+        className="shrink-0 rounded-lg bg-violet px-4 py-2 text-center text-sm font-medium text-on-solid hover:opacity-90"
       >
         See Premium
       </Link>

@@ -65,10 +65,13 @@ export async function generateSchedule(req: Request, res: Response) {
   // brand-new account.
   const prefs = await prefsFor(userId);
 
-  const tasks = await prisma.task.findMany({
+  const rows = await prisma.task.findMany({
     where: { userId },
-    include: { subject: true },
+    include: { subject: true, lesson: { select: { courseId: true } } },
   });
+  // Lesson tasks carry their course id so the scheduler can pace each course
+  // (MAX_LESSONS_PER_DAY) instead of spreading them like ordinary tasks.
+  const tasks = rows.map((t) => ({ ...t, courseId: t.lesson?.courseId ?? null }));
 
   // The controller supplies the clock; the scheduler itself stays pure.
   const planned = buildSchedule(tasks as unknown as SchedulerTask[], prefs, {

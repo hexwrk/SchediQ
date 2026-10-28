@@ -41,7 +41,7 @@ export default function ForgotPasswordPage() {
     <div className="flex min-h-screen items-center justify-center bg-bg px-4">
       <div className="flex w-full max-w-sm flex-col gap-4 rounded-card border border-border bg-surface p-7">
         <div className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">SQ</span>
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-on-solid">SQ</span>
           <h1 className="text-xl font-semibold tracking-tight">Reset your password</h1>
         </div>
 
@@ -54,7 +54,7 @@ export default function ForgotPasswordPage() {
                 <p className="text-xs text-text-muted">
                   In production this link would be emailed. It works once and expires in {sent.expires ?? 30} minutes.
                 </p>
-                <Link href={resetPath} className="rounded-lg bg-primary px-4 py-2 text-center text-sm font-medium text-white hover:opacity-90">
+                <Link href={resetPath} className="rounded-lg bg-primary px-4 py-2 text-center text-sm font-medium text-on-solid hover:opacity-90">
                   Open reset link
                 </Link>
               </div>
@@ -81,7 +81,7 @@ export default function ForgotPasswordPage() {
             <button
               type="submit"
               disabled={sending}
-              className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+              className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
             >
               {sending ? "Sending..." : "Send reset link"}
             </button>

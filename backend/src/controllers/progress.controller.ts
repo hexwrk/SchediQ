@@ -146,8 +146,6 @@ export async function getProgress(req: Request, res: Response) {
       name: u.name || u.email.split("@")[0],
       xp: totalXp(factsByUser.get(u.id) as XpFacts),
       isCurrentUser: u.id === userId,
-      // The seeded cohort uses the demo.schediq.app domain; label it as demo.
-      isDemo: u.email.endsWith("@demo.schediq.app"),
     }));
   scored.sort((a, b) => b.xp - a.xp || a.name.localeCompare(b.name));
   const leaderboard = scored.map((entry, i) => ({ ...entry, rank: i + 1, level: levelFromXp(entry.xp).level }));

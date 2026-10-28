@@ -63,7 +63,7 @@ export function EmptyState({
   actionLabel?: string;
   onAction?: () => void;
 }) {
-  const cls = "rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90";
+  const cls = "rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90";
   return (
     <div className="flex flex-col items-center gap-2 rounded-card border border-dashed border-border bg-surface px-6 py-10 text-center">
       <p className="font-medium">{title}</p>

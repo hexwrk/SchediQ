@@ -124,7 +124,7 @@ export default function TasksPage() {
         <p className="text-sm text-text-muted">Everything on your plate.</p>
         <Link
           href="/add-task"
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90"
         >
           <PlusIcon width={16} height={16} />
           Add task
@@ -220,7 +220,7 @@ export default function TasksPage() {
                   </label>
                 </div>
                 <div className="flex gap-2">
-                  <button type="submit" className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90">
+                  <button type="submit" className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90">
                     Save
                   </button>
                   <button

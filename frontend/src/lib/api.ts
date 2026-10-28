@@ -312,7 +312,6 @@ export interface LeaderboardEntry {
   level: number;
   rank: number;
   isCurrentUser: boolean;
-  isDemo: boolean;
 }
 
 export type XpSource = "session" | "focus_bonus" | "lesson" | "quiz" | "active_day" | "course";

@@ -21,7 +21,7 @@ cp .env.example .env            # then set a real JWT_SECRET
 npm install
 npx prisma migrate deploy       # applies every migration in order (see list below)
 npx prisma generate
-npx prisma db seed              # admin + demo users + classmates + courses + schedule + history
+npx prisma db seed              # creates the super admin only (no demo data)
 npm run dev                     # API on http://localhost:4000
 ```
 
@@ -70,39 +70,37 @@ npm run dev                     # app on http://localhost:3000
 `next.config.ts` sets `turbopack.root` to the repo root so the frontend can
 import `shared/validation.ts` (the same validator file the backend uses).
 
-## 4. Demo logins
+## 4. Accounts and the walkthrough
 
-| Account | Password | Role / tier | Use it to show |
-| --- | --- | --- | --- |
-| `demo@schediq.app` | `demo1234` | USER, PREMIUM | The full journey: populated dashboard, courses, mastery, XP |
-| `free@schediq.app` | `free1234` | USER, FREE | Tier gate: already at the 2-course cap, so Generate shows the Upgrade prompt |
-| `admin@schediq.app` | `admin1234` | SUPER_ADMIN, PREMIUM | Admin users, System & backup, Data model, Admin report |
+The seed creates exactly one account; there are no demo users or demo data.
 
-These are demo credentials. Change or delete them on anything that is not a
-local demo.
+| Account | Password | Role / tier |
+| --- | --- | --- |
+| `admin@schediq.app` | `admin1234` | SUPER_ADMIN, PREMIUM (admin users, System & backup, Data model, Admin report) |
 
-### The connected use case (demo script)
+Change that password (or delete the account) on anything that is not a local
+install. Students register themselves at `/register` and start on the FREE tier.
 
-Plan your work, learn weak topics through a generated course, and watch
-mastery and progress grow. Log in as `demo@schediq.app`:
+### The connected use case (walkthrough with a fresh account)
 
-1. **Dashboard** is the progress home: this week's hours, lessons, quizzes,
-   streak and level; per-subject mastery bars with their weekly change; active
-   course cards; a 14-day XP / study-minutes trend; then the weekly calendar.
-   On first login: Databases course 2/5 (40%), Networking course complete,
-   Operating Systems at 0% mastery.
-2. **Add task**: type a sentence, Parse, Save. Then **Regenerate schedule** on
-   the Dashboard and the task appears on the calendar.
-3. **Courses**: open "Operating Systems Core Concepts" (or generate a new
-   course and link it to a subject). Open lesson 1, answer the quiz
-   (lesson 1 answers: 2nd, 1st, 3rd option), Submit.
-4. A `+50 XP` float appears (20 lesson + 30 quiz). Back on the Dashboard,
-   Operating Systems mastery moves from 0% to 14%, the course bar reads 1/5,
-   and "Lessons this week" / "Quizzes passed" go up. Reload: it all persists.
-5. On the course page, **Add this course to my schedule** creates one 30-minute
-   task per unfinished lesson (linked by `Task.lessonId`). Regenerate the
-   schedule and they appear on the calendar. Completing the lesson marks its
-   task DONE.
+Plan your work, learn weak topics through a generated course, and watch mastery
+and progress grow:
+
+1. **Register** a new account. The Dashboard shows a 3-step onboarding checklist
+   instead of empty widgets.
+2. **Subjects**: add two or three (e.g. Databases, Networking).
+3. **Add task**: type a sentence such as "ERD assignment, 6 hours, due next
+   Friday", Parse, Save. Then **Generate schedule** on the Dashboard: the six
+   hours are spread over the days up to the deadline, not packed into the first few.
+4. **Courses**: generate a course for a weak subject and link it to that
+   subject. Open lesson 1, answer the quiz, Submit: `+50 XP` (20 lesson + 30
+   quiz). Back on the Dashboard the subject's mastery bar, the course bar, the
+   weekly summary and the HUD all move, and stay after a reload.
+5. On the course page, **Add this course to my schedule** creates one task per
+   lesson. Regenerate: lessons are paced one per day per course. Completing a
+   lesson's study block completes the lesson, and vice versa.
+6. **Tier gate**: as a FREE account, generate a third course to see the
+   "Upgrade to Premium" prompt; **Upgrade** (demo, no payment) lifts it.
 
 ## 5. Validation (client AND server, one shared rule file)
 
@@ -278,17 +276,38 @@ covered by `backend/test/scheduler.test.ts`:
 | Situation | Behaviour |
 | --- | --- |
 | Deadline already passed | Placed as soon as possible from now (never in the past), flagged **Overdue** |
-| Task longer than the daily limit | Split across as many days as needed |
+| Task longer than the daily limit | Spread across the days before its deadline (never more than the daily limit on any day) |
 | Cannot finish before its deadline | Kept and placed in full, flagged **At risk** with the date its last block ends |
 | Does not fit at all (zero window/limit, or past the horizon) | Not dropped: flagged **Not scheduled** with the reason and the setting to change |
 | No tasks | Empty schedule, the dashboard explains what to do next |
 | No saved preferences | Defaults (180 min/day, 09:00-21:00, 10 min breaks, clustering on) |
 | Very many tasks | Planning horizon of 60 days bounds the work; 2,000 tasks schedule in well under 2 s |
 
+**How work is distributed (spread, not front-loaded).** Two passes:
+
+1. *Allocate* (tasks in deadline, priority, id order). Each task's minutes are
+   spread over the days from today to its deadline. It uses at most
+   `floor(minutes / MIN_DAILY_SHARE_MIN)` days (45 min minimum share), picked
+   evenly across that range. Each day re-targets
+   `ceil(remaining / days left)`, so a day that is already full passes its
+   shortfall to the next. A 6-hour task due in 7 days becomes about 45 min a day
+   for 8 days, not three packed days. Leftovers go to any other free day before
+   the deadline, then as early as possible after it (flagged At risk).
+   Lesson tasks from a course are paced instead: at most `MAX_LESSONS_PER_DAY`
+   (1) per course per day.
+2. *Lay out* each day: tasks in allocation order, with subject clustering
+   (same-subject work back to back). Each task gets **one** block per day,
+   split into equal blocks of at most `MAX_FOCUS_MIN` (90) only when longer.
+   There is a normal break between blocks and a `SWITCH_PENALTY` (1.5x) break
+   when the cognitive category changes. Break time is reserved during
+   allocation, so a day can never run past the study window.
+
+The same input always gives byte-identical output (`npm test` checks this).
+
 `GET /api/sessions` and `POST /api/sessions/generate` return `{ sessions,
 issues }`. The issues are re-derived from the stored rows on every load, so the
-dashboard's **Needs attention** panel stays accurate as time passes. The seed
-includes one overdue task so the panel is visible in the demo.
+dashboard's **Needs attention** panel stays accurate as time passes (add a task
+with yesterday's deadline to see it).
 
 ## 14. One progress system (lessons <-> tasks)
 
@@ -331,6 +350,25 @@ explains the page and links to the next action, or the data. A new account
 sees a 3-step onboarding checklist on the dashboard. Unexpected render errors
 are caught by `src/app/(app)/error.tsx` (and `global-error.tsx` for the root),
 and unknown URLs get a friendly 404.
+
+## 18. Dark mode
+
+The theme toggle (sun / moon / monitor icon in the top bar) cycles **Light,
+Dark, System**. System is the default and follows the OS setting live. The
+choice is saved in `localStorage` (`schediq_theme`).
+
+- `src/lib/theme.ts` holds a tiny inline script, rendered in `<head>` by the
+  root layout. It sets `<html data-theme="light|dark">` while the HTML is still
+  parsing, before first paint, so a saved dark choice never flashes light. This
+  is the approach from the Next docs guide "Preventing flash before hydration".
+  `<html>` carries `suppressHydrationWarning` so React keeps that attribute.
+- Every colour is a token in `globals.css` with a light and a dark value
+  (including Tailwind's red scale for errors and destructive actions, and
+  `color-scheme` so native date pickers and selects match). Every text token
+  passes 4.5:1 contrast on its backgrounds in both themes, and form-field
+  borders use a separate `--input` token at 3:1 or more.
+- Printing always uses the light palette, so reports print dark-on-white
+  whatever theme is on screen.
 
 See `docs/UAT.md` for the user acceptance test checklist.
 

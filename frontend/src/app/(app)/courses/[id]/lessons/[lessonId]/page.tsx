@@ -174,7 +174,7 @@ function LessonView({ id, lessonId }: { id: string; lessonId: string }) {
                           ? "border-red-500 bg-red-50"
                           : chosen
                             ? "border-primary bg-primary/5"
-                            : "border-border hover:bg-bg"
+                            : "border-input hover:bg-bg"
                     }`}
                   >
                     <input
@@ -205,7 +205,7 @@ function LessonView({ id, lessonId }: { id: string; lessonId: string }) {
           <button
             onClick={submitQuiz}
             disabled={busy}
-            className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
           >
             {busy ? "Grading..." : result ? "Resubmit" : "Submit answers"}
           </button>

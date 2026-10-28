@@ -232,7 +232,7 @@ export default function CoursesPage() {
         <button
           type="submit"
           disabled={generating}
-          className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
         >
           <SparkIcon width={16} height={16} />
           {generating ? "Generating..." : "Generate course"}

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_PREFS,
   HORIZON_DAYS,
+  MAX_FOCUS_MIN,
+  MAX_LESSONS_PER_DAY,
   PlannedSession,
   SchedulerPrefs,
   SchedulerTask,
@@ -26,7 +28,22 @@ function task(over: Partial<SchedulerTask> & { durationMin: number }): Scheduler
     subjectId: over.subjectId ?? "s1",
     subject: over.subject ?? { cognitiveCategory: "Analytical" },
     status: over.status ?? "PENDING",
+    courseId: over.courseId ?? null,
   };
+}
+
+// Minutes per local day, keyed by day offset from NOW (0 = today).
+function minutesByDay(out: PlannedSession[], taskId?: string): Map<number, number> {
+  const m = new Map<number, number>();
+  for (const s of out) {
+    if (taskId && s.taskId !== taskId) continue;
+    const off = Math.round(
+      (new Date(s.startsAt.getFullYear(), s.startsAt.getMonth(), s.startsAt.getDate()).getTime() -
+        new Date(2026, 9, 28).getTime()) / 86400000
+    );
+    m.set(off, (m.get(off) ?? 0) + mins(s));
+  }
+  return m;
 }
 
 const mins = (s: PlannedSession) => (s.endsAt.getTime() - s.startsAt.getTime()) / 60000;
@@ -153,5 +170,103 @@ describe("scheduler: edge cases", () => {
     const missingMin = unscheduled.reduce((s, i) => s + i.unplacedMin, 0);
     assert.equal(placedMin + missingMin, 2000 * 60, "every minute is either placed or reported");
     assert.match(unscheduled[0].reason, new RegExp(`${HORIZON_DAYS} days`));
+  });
+});
+
+describe("scheduler: spreads work instead of front-loading", () => {
+  it("a 6-hour task due in 7 days is spread across the week, not packed into 3 days", () => {
+    const t = task({ id: "six", durationMin: 360, deadline: day(7) });
+    const out = buildSchedule([t], DEFAULT_PREFS, { now: NOW });
+    const byDay = minutesByDay(out);
+    const total = [...byDay.values()].reduce((a, b) => a + b, 0);
+    assert.equal(total, 360);
+    assert.ok(byDay.size >= 6, `spread over ${byDay.size} days`);
+    for (const [d, m] of byDay) {
+      assert.ok(m <= 60, `day ${d} has ${m} min (expected an even ~45-50 min share)`);
+      assert.ok(d <= 7, "nothing placed after the deadline");
+    }
+  });
+
+  it("no day is overloaded while a later day before the deadline sits empty", () => {
+    const tasks = [
+      task({ id: "a", durationMin: 240, deadline: day(5) }),
+      task({ id: "b", durationMin: 180, deadline: day(6) }),
+    ];
+    const byDay = minutesByDay(buildSchedule(tasks, DEFAULT_PREFS, { now: NOW }));
+    const max = Math.max(...byDay.values());
+    for (let d = 0; d <= 5; d++) {
+      // If any day is at the cap, every day up to the deadline must have work.
+      if (max >= DEFAULT_PREFS.maxDailyMins) assert.ok((byDay.get(d) ?? 0) > 0, `day ${d} empty while another is full`);
+    }
+    assert.ok(max < DEFAULT_PREFS.maxDailyMins, `max day load ${max} should be well under the cap`);
+  });
+
+  it("a short task stays one block instead of being shredded across days", () => {
+    const out = buildSchedule([task({ id: "short", durationMin: 60, deadline: day(7) })], DEFAULT_PREFS, { now: NOW });
+    assert.equal(out.length, 1);
+    assert.equal(mins(out[0]), 60);
+  });
+
+  it("each task gets ONE block per day, split only above MAX_FOCUS_MIN", () => {
+    const tasks = [
+      task({ id: "big", durationMin: 150, deadline: day(0, 23, 0) }),
+      task({ id: "mid", durationMin: 80, deadline: day(0, 23, 0) }),
+    ];
+    const out = buildSchedule(tasks, { ...DEFAULT_PREFS, maxDailyMins: 300 }, { now: NOW });
+    const big = out.filter((s) => s.taskId === "big");
+    const mid = out.filter((s) => s.taskId === "mid");
+    assert.equal(mid.length, 1, "80 min -> one block");
+    assert.equal(big.length, 2, "150 min -> two blocks");
+    for (const b of big) assert.ok(mins(b) <= MAX_FOCUS_MIN);
+    assert.equal(big.reduce((a, b) => a + mins(b), 0), 150);
+  });
+
+  it("keeps the 1.5x switch-penalty break between different cognitive categories", () => {
+    const tasks = [
+      task({ id: "x1", durationMin: 60, deadline: day(0, 23, 0), subjectId: "math", subject: { cognitiveCategory: "Analytical" } }),
+      task({ id: "x2", durationMin: 60, deadline: day(0, 23, 0), subjectId: "essay", subject: { cognitiveCategory: "Verbal" } }),
+    ];
+    const out = [...buildSchedule(tasks, DEFAULT_PREFS, { now: NOW })].sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
+    const gap = (out[1].startsAt.getTime() - out[0].endsAt.getTime()) / 60000;
+    assert.equal(gap, Math.round(DEFAULT_PREFS.breakMins * 1.5));
+  });
+});
+
+describe("scheduler: course lesson pacing", () => {
+  it(`spreads a course's lessons at most ${MAX_LESSONS_PER_DAY} per day`, () => {
+    // Five 30-min lesson tasks with the same near deadline (the worst case for
+    // the old greedy packer, which put them all on day 0).
+    const lessons = Array.from({ length: 5 }, (_, i) =>
+      task({ id: `lesson${i}`, durationMin: 30, deadline: day(2), courseId: "course-1", subjectId: "db" })
+    );
+    const out = buildSchedule(lessons, DEFAULT_PREFS, { now: NOW });
+    const perDay = new Map<string, number>();
+    for (const s of out) perDay.set(dayKey(s.startsAt), (perDay.get(dayKey(s.startsAt)) ?? 0) + 1);
+    assert.equal(out.length, 5, "every lesson placed");
+    assert.equal(perDay.size, 5, "five different days");
+    for (const n of perDay.values()) assert.ok(n <= MAX_LESSONS_PER_DAY);
+  });
+
+  it("two different courses may each have a lesson on the same day", () => {
+    const tasks = [
+      task({ id: "c1l1", durationMin: 30, deadline: day(3), courseId: "c1" }),
+      task({ id: "c2l1", durationMin: 30, deadline: day(3), courseId: "c2" }),
+    ];
+    const out = buildSchedule(tasks, DEFAULT_PREFS, { now: NOW });
+    assert.equal(new Set(out.map((s) => dayKey(s.startsAt))).size, 1);
+  });
+});
+
+describe("scheduler: determinism of the spread", () => {
+  it("is byte-identical across runs with a mixed workload", () => {
+    const tasks = [
+      task({ id: "m1", durationMin: 360, deadline: day(7) }),
+      task({ id: "m2", durationMin: 45, deadline: day(1), priority: "HIGH" }),
+      task({ id: "m3", durationMin: 200, deadline: day(-1) }),
+      ...Array.from({ length: 4 }, (_, i) => task({ id: `m4l${i}`, durationMin: 30, deadline: day(2 * (i + 1)), courseId: "cx" })),
+    ];
+    const a = JSON.stringify(buildSchedule(tasks, DEFAULT_PREFS, { now: NOW }));
+    const b = JSON.stringify(buildSchedule([...tasks].reverse(), DEFAULT_PREFS, { now: NOW }));
+    assert.equal(a, b);
   });
 });

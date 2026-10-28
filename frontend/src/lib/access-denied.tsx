@@ -15,7 +15,7 @@ export function AccessDenied() {
         This area is for super administrators only. Your account does not have the required role,
         and the server refuses these requests (HTTP 403) regardless of what the browser shows.
       </p>
-      <Link href="/dashboard" className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90">
+      <Link href="/dashboard" className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90">
         Back to dashboard
       </Link>
     </div>

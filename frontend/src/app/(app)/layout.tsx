@@ -25,6 +25,7 @@ import {
   UsersIcon,
 } from "@/lib/icons";
 import { AuthUser } from "@/lib/api";
+import { ThemeToggle } from "@/lib/theme-toggle";
 import { ComponentType, SVGProps } from "react";
 
 // Shared chrome for every authenticated page: fixed left sidebar + top bar.
@@ -156,7 +157,7 @@ function Shell({
         <button
           aria-label="Close menu"
           onClick={close}
-          className="fixed inset-0 z-30 bg-black/30 lg:hidden print:hidden"
+          className="fixed inset-0 z-30 bg-black/50 lg:hidden print:hidden"
         />
       )}
 
@@ -168,7 +169,7 @@ function Shell({
       >
         <div className="flex items-center justify-between gap-2 px-5 py-5">
           <span className="flex items-center gap-2">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-on-solid">
               SQ
             </span>
             <span className="text-lg font-semibold tracking-tight">SchediQ</span>
@@ -221,6 +222,7 @@ function Shell({
           <div className="flex items-center gap-3 text-sm sm:gap-5">
             <Hud />
             <div className="flex items-center gap-3">
+              <ThemeToggle />
               <TierBadge user={user} />
               <span className="hidden text-text-muted md:inline">{userLabel}</span>
               <Link
@@ -246,7 +248,7 @@ function TierBadge({ user }: { user: AuthUser }) {
   return (
     <span className="flex items-center gap-1.5">
       {user.role === "SUPER_ADMIN" && (
-        <span className="rounded-full bg-text px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+        <span className="rounded-full bg-text px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-on-solid">
           Admin
         </span>
       )}
@@ -254,7 +256,7 @@ function TierBadge({ user }: { user: AuthUser }) {
         href="/upgrade"
         title={premium ? "Premium plan (demo tier)" : "Free plan: click to see Premium"}
         className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-          premium ? "bg-violet text-white" : "bg-bg text-text-muted ring-1 ring-border"
+          premium ? "bg-violet text-on-solid" : "bg-bg text-text-muted ring-1 ring-border"
         }`}
       >
         {premium ? "Premium" : "Free"}

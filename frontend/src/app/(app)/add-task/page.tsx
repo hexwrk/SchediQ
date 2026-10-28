@@ -158,14 +158,14 @@ export default function AddTaskPage() {
           onChange={(e) => setText(e.target.value)}
           rows={3}
           maxLength={500}
-          className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-primary"
+          className="w-full rounded-lg border border-input bg-surface px-3 py-2 text-sm outline-none focus:border-primary"
           placeholder="Finish calculus problem sheet 4, about 90 minutes, due next week"
         />
         <div className="mt-3 flex items-center gap-3">
           <button
             onClick={onParse}
             disabled={parsing || !text.trim()}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
           >
             <SparkIcon width={16} height={16} />
             {parsing ? "Parsing..." : "Parse task"}
@@ -200,7 +200,7 @@ export default function AddTaskPage() {
               <select
                 value={pendingCategory}
                 onChange={(e) => setPendingCategory(e.target.value as CognitiveCategory)}
-                className="rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+                className="rounded-lg border border-input bg-surface px-3 py-2 text-sm"
               >
                 {CATEGORIES.map((c) => (
                   <option key={c} value={c}>
@@ -211,7 +211,7 @@ export default function AddTaskPage() {
             </label>
             <button
               onClick={confirmNewSubject}
-              className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90"
             >
               Create subject
             </button>
@@ -280,7 +280,7 @@ export default function AddTaskPage() {
             <select
               value={priority}
               onChange={(e) => setPriority(e.target.value as TaskPriority)}
-              className="rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-primary"
+              className="rounded-lg border border-input bg-surface px-3 py-2 outline-none focus:border-primary"
             >
               <option value="LOW">Low</option>
               <option value="MEDIUM">Medium</option>
@@ -293,7 +293,7 @@ export default function AddTaskPage() {
             <select
               value={subjectId}
               onChange={(e) => setSubjectId(e.target.value)}
-              className="rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-primary"
+              className="rounded-lg border border-input bg-surface px-3 py-2 outline-none focus:border-primary"
             >
               <option value="">None</option>
               {subjects.map((s) => (
@@ -311,7 +311,7 @@ export default function AddTaskPage() {
           <button
             type="submit"
             disabled={saving}
-            className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
           >
             {saving ? "Saving..." : "Save task"}
           </button>

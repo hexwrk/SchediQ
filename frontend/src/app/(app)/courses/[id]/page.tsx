@@ -100,7 +100,7 @@ export default function CoursePage({ params }: PageProps<"/courses/[id]">) {
           {next && (
             <Link
               href={`/courses/${course.id}/lessons/${next.id}`}
-              className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90"
             >
               {progress.lessonsDone === 0 ? "Start course" : "Continue"}
             </Link>
@@ -135,7 +135,7 @@ export default function CoursePage({ params }: PageProps<"/courses/[id]">) {
             <select
               value={course.subjectId ?? ""}
               onChange={(e) => link(e.target.value)}
-              className="rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-primary"
+              className="rounded-lg border border-input bg-surface px-3 py-2 outline-none focus:border-primary"
             >
               <option value="">Not linked</option>
               {subjects.map((s) => (
@@ -171,7 +171,7 @@ export default function CoursePage({ params }: PageProps<"/courses/[id]">) {
               <span className="flex items-center gap-3">
                 <span
                   className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
-                    l.completedAt ? "bg-accent text-white" : "bg-bg text-text-muted ring-1 ring-border"
+                    l.completedAt ? "bg-accent text-on-solid" : "bg-bg text-text-muted ring-1 ring-border"
                   }`}
                 >
                   {l.completedAt ? "✓" : l.order}

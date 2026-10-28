@@ -160,7 +160,7 @@ export default function AdminUsersPage() {
       </div>
 
       {deleting && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4" role="dialog" aria-modal>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" role="dialog" aria-modal>
           <div className="flex w-full max-w-md flex-col gap-3 rounded-card border border-border bg-surface p-6">
             <h2 className="text-lg font-semibold text-red-600">Delete account?</h2>
             <p className="text-sm text-text-muted">
@@ -183,7 +183,7 @@ export default function AdminUsersPage() {
               </button>
               <button
                 onClick={confirmDelete}
-                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90"
               >
                 Delete permanently
               </button>

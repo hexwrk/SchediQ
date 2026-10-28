@@ -70,7 +70,7 @@ export function useXpReward() {
   const float = xpFloat ? (
     <div
       key={xpFloat.id}
-      className="pointer-events-none fixed left-1/2 top-24 z-50 -translate-x-1/2 animate-bounce rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-white shadow-lg"
+      className="pointer-events-none fixed left-1/2 top-24 z-50 -translate-x-1/2 animate-bounce rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-on-solid shadow-lg"
     >
       +{xpFloat.amount} XP
     </div>

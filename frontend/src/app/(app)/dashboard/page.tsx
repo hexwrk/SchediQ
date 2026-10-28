@@ -159,7 +159,7 @@ export default function DashboardPage() {
         <button
           onClick={regenerate}
           disabled={regenerating}
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           <RefreshIcon width={16} height={16} />
           {regenerating ? "Regenerating..." : "Regenerate schedule"}
@@ -220,7 +220,7 @@ function Onboarding({ steps }: { steps: Step[] }) {
             <span className="flex items-center gap-2 text-sm font-semibold">
               <span
                 className={`flex h-6 w-6 items-center justify-center rounded-full text-xs ${
-                  s.done ? "bg-accent text-white" : "bg-bg text-text-muted ring-1 ring-border"
+                  s.done ? "bg-accent text-on-solid" : "bg-bg text-text-muted ring-1 ring-border"
                 }`}
               >
                 {s.done ? "✓" : i + 1}
@@ -231,11 +231,11 @@ function Onboarding({ steps }: { steps: Step[] }) {
             {!s.done && (
               <span className="mt-auto flex flex-wrap gap-2 pt-1">
                 {s.href ? (
-                  <Link href={s.href} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:opacity-90">
+                  <Link href={s.href} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-solid hover:opacity-90">
                     {s.cta}
                   </Link>
                 ) : (
-                  <button onClick={s.onClick} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white hover:opacity-90">
+                  <button onClick={s.onClick} className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-solid hover:opacity-90">
                     {s.cta}
                   </button>
                 )}
@@ -309,7 +309,7 @@ function WeekCalendar({
           const dayMins = list.reduce((acc, s) => acc + minutesOf(s), 0);
           const pct = maxDaily > 0 ? (dayMins / maxDaily) * 100 : 0;
           // > 90% is over-loaded (red), 60-90% caution (yellow), < 60% comfortable.
-          const barColor = pct > 90 ? "#dc2626" : pct >= 60 ? "#eab308" : "var(--accent)";
+          const barColor = pct > 90 ? "var(--color-red-600)" : pct >= 60 ? "#eab308" : "var(--accent)";
 
           return (
             <div key={dayKey(day)} className="flex min-h-48 flex-col rounded-card border border-border bg-surface p-3">

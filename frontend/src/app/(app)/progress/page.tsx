@@ -155,13 +155,10 @@ export default function ProgressPage() {
       <div className="rounded-card border border-border bg-surface p-5">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-sm font-semibold">Leaderboard</h2>
-          <span className="rounded-full bg-bg px-2.5 py-1 text-[10px] font-medium uppercase tracking-wide text-text-muted">
-            Demo cohort
-          </span>
         </div>
         <p className="mb-4 text-xs text-text-muted">
-          Seeded classmate accounts. XP is derived from completed sessions,
-          lessons and quizzes with the exact same rules for everyone, including you.
+          Every student on this SchediQ install, ranked by XP. XP is derived from completed
+          sessions, lessons and quizzes with the exact same rules for everyone, including you.
         </p>
         <ol className="flex flex-col gap-1.5">
           {leaderboard.map((e) => (
@@ -175,13 +172,8 @@ export default function ProgressPage() {
                 <span className="w-6 text-text-muted">{e.rank}.</span>
                 <span>{e.name}</span>
                 {e.isCurrentUser && (
-                  <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] text-white">
+                  <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] text-on-solid">
                     You
-                  </span>
-                )}
-                {e.isDemo && !e.isCurrentUser && (
-                  <span className="rounded-full bg-bg px-2 py-0.5 text-[10px] text-text-muted">
-                    demo
                   </span>
                 )}
               </span>

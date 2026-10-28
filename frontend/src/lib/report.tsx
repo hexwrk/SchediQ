@@ -85,7 +85,7 @@ export function ReportFrame({
         <div className="flex gap-2">
           <button
             onClick={() => window.print()}
-            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90"
           >
             Print / Save as PDF
           </button>
@@ -107,7 +107,7 @@ export function ReportFrame({
               value={range.from}
               max={range.to || undefined}
               onChange={(e) => onRange({ ...range, from: e.target.value })}
-              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-text outline-none focus:border-primary"
+              className="rounded-lg border border-input bg-surface px-3 py-1.5 text-sm text-text outline-none focus:border-primary"
             />
           </label>
           <label className="flex flex-col gap-1 text-xs font-medium text-text-muted">
@@ -117,7 +117,7 @@ export function ReportFrame({
               value={range.to}
               min={range.from || undefined}
               onChange={(e) => onRange({ ...range, to: e.target.value })}
-              className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-text outline-none focus:border-primary"
+              className="rounded-lg border border-input bg-surface px-3 py-1.5 text-sm text-text outline-none focus:border-primary"
             />
           </label>
           <button onClick={() => onRange({ from: "", to: "" })} className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-bg">

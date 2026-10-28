@@ -16,7 +16,7 @@ export default function ResetPasswordPage() {
     <div className="flex min-h-screen items-center justify-center bg-bg px-4">
       <div className="flex w-full max-w-sm flex-col gap-4 rounded-card border border-border bg-surface p-7">
         <div className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">SQ</span>
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-on-solid">SQ</span>
           <h1 className="text-xl font-semibold tracking-tight">Choose a new password</h1>
         </div>
         <Suspense fallback={<p className="text-sm text-text-muted">Loading...</p>}>
@@ -73,7 +73,7 @@ function ResetForm() {
     return (
       <div className="flex flex-col gap-3 text-sm">
         <p className="text-accent">Password updated. You can now log in with your new password.</p>
-        <Link href="/login" className="rounded-lg bg-primary px-4 py-2 text-center font-medium text-white hover:opacity-90">
+        <Link href="/login" className="rounded-lg bg-primary px-4 py-2 text-center font-medium text-on-solid hover:opacity-90">
           Log in
         </Link>
       </div>
@@ -117,7 +117,7 @@ function ResetForm() {
       <button
         type="submit"
         disabled={saving}
-        className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+        className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
       >
         {saving ? "Saving..." : "Set new password"}
       </button>

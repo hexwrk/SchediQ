@@ -19,7 +19,7 @@ type Field = "name" | "email" | "password";
 const FIELDS: Field[] = ["name", "email", "password"];
 
 const STRENGTH = {
-  weak: { label: "Weak", color: "#dc2626", width: "25%" },
+  weak: { label: "Weak", color: "var(--color-red-600)", width: "25%" },
   fair: { label: "Fair", color: "var(--amber)", width: "50%" },
   good: { label: "Good", color: "var(--primary)", width: "75%" },
   strong: { label: "Strong", color: "var(--accent)", width: "100%" },
@@ -93,7 +93,7 @@ export default function RegisterPage() {
         className="flex w-full max-w-sm flex-col gap-4 rounded-card border border-border bg-surface p-7"
       >
         <div className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-on-solid">
             SQ
           </span>
           <h1 className="text-xl font-semibold tracking-tight">Sign up</h1>
@@ -165,7 +165,7 @@ export default function RegisterPage() {
         <button
           type="submit"
           disabled={submitting}
-          className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
         >
           {submitting ? "Creating account..." : "Sign up"}
         </button>

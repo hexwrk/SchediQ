@@ -129,7 +129,7 @@ export default function UpgradePage() {
             <button
               onClick={() => switchTo("PREMIUM")}
               disabled={saving}
-              className="inline-flex items-center gap-2 rounded-lg bg-violet px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-lg bg-violet px-5 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
             >
               <StarIcon width={16} height={16} />
               {saving ? "Upgrading..." : "Upgrade to Premium (demo, no payment)"}
