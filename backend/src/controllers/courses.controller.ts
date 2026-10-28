@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { CourseTemplate, QuizQuestion, pickTemplate } from "../lib/courseTemplates";
 import { XP_RULES } from "../lib/gamification";
+import { aiEnabled, logAiFailure, openAiClient } from "../lib/openai";
 import { courseLevelField, intField, topicField } from "../lib/validators";
 import { FREE_COURSE_LIMIT } from "../../../shared/validation";
 
@@ -16,6 +17,11 @@ import { FREE_COURSE_LIMIT } from "../../../shared/validation";
 const MODEL = "gpt-4o-mini";
 // Some creativity for explanations, low enough that quizzes stay factual.
 const TEMPERATURE = 0.4;
+// Output token budget per lesson (explanation + key points + 3 questions is
+// ~700-900 tokens) plus the course header. A reply cut off by the cap is
+// invalid JSON, which fails validation and falls back to the templates.
+const TOKENS_PER_LESSON = 1100;
+const TOKENS_BASE = 400;
 // Minutes per lesson when a course is turned into scheduler tasks.
 const LESSON_STUDY_MIN = 30;
 
@@ -64,9 +70,7 @@ const aiCourseSchema = z.object({
 });
 
 async function openAiCourse(topic: string, level: string, lessonCount: number): Promise<CourseTemplate> {
-  // Imported lazily so the package is only loaded when actually used.
-  const OpenAI = (await import("openai")).default;
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const client = await openAiClient();
 
   // The topic is user input: treat it strictly as data, never as instructions.
   const system = [
@@ -81,6 +85,7 @@ async function openAiCourse(topic: string, level: string, lessonCount: number): 
   const completion = await client.chat.completions.create({
     model: MODEL,
     temperature: TEMPERATURE,
+    max_completion_tokens: TOKENS_BASE + TOKENS_PER_LESSON * lessonCount,
     messages: [
       { role: "system", content: system },
       { role: "user", content: topic },
@@ -233,13 +238,13 @@ export async function generateCourse(req: Request, res: Response) {
   let source: "AI" | "SEED" = "SEED";
   let template: CourseTemplate | null = null;
   let fallback = false;
-  if ((process.env.AI_PARSER ?? "rule") === "openai" && process.env.OPENAI_API_KEY) {
+  if (aiEnabled()) {
     try {
       template = await openAiCourse(topic, level, lessonCount);
       source = "AI";
     } catch (err) {
       // On ANY failure (network, quota, bad JSON, schema) use the templates.
-      console.error("OpenAI course generation failed, falling back to templates:", err);
+      logAiFailure("course generation", err);
       fallback = true;
     }
   }

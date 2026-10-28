@@ -15,6 +15,9 @@ import { errorMessage, useApi } from "@/lib/use-api";
 // RESTORE IS DESTRUCTIVE AND ADMIN-ONLY: it replaces the entire database with
 // the uploaded file. The UI requires typing RESTORE, and the server
 // independently requires confirm=RESTORE plus the SUPER_ADMIN role.
+//
+// In production (DEMO_MODE=false, Neon) the server reports backups as managed
+// by Neon: the buttons are disabled and the reason is shown instead of an error.
 
 const MAX_UPLOAD_MB = 50;
 
@@ -104,6 +107,8 @@ export default function SystemPage() {
   if (loading) return <LoadingState label="Loading system stats" rows={2} />;
   if (!stats) return <ErrorState message={loadError ?? "Stats unavailable."} onRetry={reload} retrying={reloading} />;
 
+  const backupOff = !stats.backup.enabled;
+
   return (
     <div className="flex max-w-5xl flex-col gap-6">
       <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -114,6 +119,13 @@ export default function SystemPage() {
         <Stat label="Completed" value={stats.counts.completedSessions} />
         <Stat label="DB size" value={formatBytes(stats.databaseSizeBytes)} />
       </div>
+
+      {stats.backup.message && (
+        <div role="status" className="flex items-start gap-2 rounded-card border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+          <DatabaseIcon width={18} height={18} className="mt-0.5 shrink-0 text-primary" aria-hidden />
+          <p>{stats.backup.message}</p>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="flex flex-col gap-3 rounded-card border border-border bg-surface p-5">
@@ -137,7 +149,7 @@ export default function SystemPage() {
           <div>
             <button
               onClick={createBackup}
-              disabled={backingUp}
+              disabled={backingUp || backupOff}
               className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
             >
               {backingUp ? "Creating backup..." : "Create backup"}
@@ -164,6 +176,7 @@ export default function SystemPage() {
               ref={fileRef}
               type="file"
               accept=".sql,.json"
+              disabled={backupOff}
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               className="text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-bg file:px-3 file:py-1.5 file:text-sm"
             />
@@ -173,6 +186,7 @@ export default function SystemPage() {
             Type RESTORE to confirm
             <input
               value={confirm}
+              disabled={backupOff}
               onChange={(e) => setConfirm(e.target.value)}
               aria-invalid={!!restoreErrors.confirm}
               className={inputClass(restoreErrors.confirm)}
@@ -182,7 +196,7 @@ export default function SystemPage() {
           <div>
             <button
               type="submit"
-              disabled={restoring}
+              disabled={restoring || backupOff}
               className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
             >
               {restoring ? "Restoring..." : "Restore database"}

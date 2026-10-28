@@ -8,12 +8,14 @@ import {
   scheduleCourse,
 } from "../controllers/courses.controller";
 import { requireAuth } from "../middleware/auth.middleware";
+import { aiLimiter } from "../middleware/rateLimit.middleware";
 
 const router = Router();
 router.use(requireAuth);
 
 router.get("/", listCourses);
-router.post("/generate", generateCourse);
+// Generation can call OpenAI, so it shares the AI rate limit policy.
+router.post("/generate", aiLimiter(), generateCourse);
 router.get("/:id", getCourse);
 router.patch("/:id", linkCourse);
 router.delete("/:id", deleteCourse);

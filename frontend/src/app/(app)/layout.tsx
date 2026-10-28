@@ -236,7 +236,20 @@ function Shell({
           </div>
         </header>
 
-        <main className="min-w-0 flex-1 px-4 py-6 sm:px-8 sm:py-8 print:p-0">{children}</main>
+        <main className="min-w-0 flex-1 px-4 py-6 sm:px-8 sm:py-8 print:p-0">
+          {user.mustChangePassword && (
+            <div role="alert" className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-card border border-amber/40 bg-amber/5 px-4 py-3 text-sm print:hidden">
+              <span>
+                <span className="font-semibold">You are using a temporary password.</span> Choose your own to secure
+                your account.
+              </span>
+              <Link href="/account#password" className="font-medium text-primary hover:underline">
+                Change password
+              </Link>
+            </div>
+          )}
+          {children}
+        </main>
       </div>
     </div>
   );

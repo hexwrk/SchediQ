@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { Request, Response } from "express";
 import { z } from "zod";
+import { appUrl, env } from "../lib/env";
 import { prisma } from "../lib/prisma";
 import { signToken } from "../lib/jwt";
 import { emailField, nameField, passwordField } from "../lib/validators";
@@ -36,6 +37,7 @@ export function toPublicUser(user: {
   name: string;
   role: string;
   accountType: string;
+  mustChangePassword: boolean;
 }) {
   // Explicit allow-list: passwordHash must never leave the server.
   return {
@@ -44,6 +46,7 @@ export function toPublicUser(user: {
     name: user.name,
     role: user.role,
     accountType: user.accountType,
+    mustChangePassword: user.mustChangePassword,
   };
 }
 
@@ -122,12 +125,12 @@ function hashToken(raw: string): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
-// DEMO MODE: there is no email service, so the reset link is returned in the
-// response and logged to the API console. On by default outside production;
-// RESET_DEMO_MODE=false turns it off (the link is then only logged).
-function demoMode(): boolean {
-  return (process.env.RESET_DEMO_MODE ?? (process.env.NODE_ENV === "production" ? "false" : "true")) === "true";
-}
+// There is no email service yet. DEMO_MODE=true (local only) returns the reset
+// link in the response so the flow can be tested in the browser. With
+// DEMO_MODE=false (production) the response is ONLY the generic message:
+// returning the link there would let anyone reset any account by typing its
+// email. The link is written to the server log instead, where only the
+// operator can see it; the user-facing recovery path is an admin reset.
 
 const GENERIC_FORGOT = "If an account exists for that email, a reset link has been sent.";
 
@@ -138,7 +141,7 @@ export async function forgotPassword(req: Request, res: Response) {
     where: { email: { equals: email, mode: "insensitive" } },
   });
   // Same response whether or not the account exists (no enumeration), except
-  // for the demo link itself.
+  // for the demo-mode link itself.
   if (!user) {
     return res.json({ message: GENERIC_FORGOT });
   }
@@ -159,12 +162,11 @@ export async function forgotPassword(req: Request, res: Response) {
     }),
   ]);
 
-  const appUrl = process.env.APP_URL ?? process.env.CORS_ORIGIN ?? "http://localhost:3000";
-  const resetUrl = `${appUrl.replace(/\/$/, "")}/reset-password?token=${raw}`;
-  console.log(`[demo mail] Password reset for ${user.email}: ${resetUrl}`);
+  const resetUrl = `${appUrl()}/reset-password?token=${raw}`;
+  console.log(`[reset] Password reset link for ${user.email} (expires in ${RESET_TTL_MIN} min): ${resetUrl}`);
 
   return res.json(
-    demoMode()
+    env().DEMO_MODE
       ? { message: GENERIC_FORGOT, demo: true, resetUrl, expiresInMinutes: RESET_TTL_MIN }
       : { message: GENERIC_FORGOT }
   );
@@ -180,7 +182,7 @@ export async function resetPassword(req: Request, res: Response) {
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
   await prisma.$transaction([
-    prisma.user.update({ where: { id: record.userId }, data: { passwordHash } }),
+    prisma.user.update({ where: { id: record.userId }, data: { passwordHash, mustChangePassword: false } }),
     // Burn this token and any other outstanding ones for the account.
     prisma.passwordResetToken.updateMany({
       where: { userId: record.userId, usedAt: null },

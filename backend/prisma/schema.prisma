@@ -2,9 +2,15 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// DATABASE_URL: the URL the running API uses. On Neon this is the POOLED
+// string (host contains "-pooler"), ?sslmode=require.
+// DIRECT_URL: the direct (non-pooled) string, used only by Prisma Migrate
+// (`prisma migrate deploy`), which needs a session-level connection that a
+// transaction-mode pooler cannot provide. Locally both point at the same DB.
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
@@ -18,6 +24,9 @@ model User {
   role         Role        @default(USER)
   // Demo subscription tier. No billing: flipped via PATCH /api/account/tier.
   accountType  AccountType @default(FREE)
+  // Set when an admin issues a temporary password; the app asks the user to
+  // choose a new one, and changing it clears the flag.
+  mustChangePassword Boolean @default(false)
 
   subjects     Subject[]
   tasks        Task[]

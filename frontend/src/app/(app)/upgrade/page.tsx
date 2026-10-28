@@ -57,8 +57,8 @@ export default function UpgradePage() {
   return (
     <div className="flex max-w-3xl flex-col gap-6">
       <div className="rounded-card border border-amber/40 bg-amber/5 px-4 py-3 text-sm">
-        <span className="font-semibold">Demo tier, not real billing.</span> SchediQ has no payment
-        system. The button below just switches your account between Free and Premium so the
+        <span className="font-semibold">Demo tier: billing coming soon.</span> SchediQ does not take
+        payments yet. The button below just switches your account between Free and Premium so the
         difference can be shown. Nothing is charged.
       </div>
 

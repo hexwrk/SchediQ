@@ -8,8 +8,9 @@ import { FieldError, inputClass } from "@/lib/form";
 import { errorMessage } from "@/lib/use-api";
 
 // Step 1 of password reset: request a link. The server answers the same way
-// whether or not the email exists. DEMO MODE: there is no email service, so
-// the link is shown on screen (and logged by the API) instead of emailed.
+// whether or not the email exists. There is no email service yet: in DEMO_MODE
+// (local only) the API returns the link and it is shown here; in production
+// the API never returns it, and recovery is an admin-issued temporary password.
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -59,7 +60,10 @@ export default function ForgotPasswordPage() {
                 </Link>
               </div>
             ) : (
-              <p className="text-text-muted">Check your inbox. The link expires in 30 minutes.</p>
+              <p className="text-text-muted">
+                Email delivery is not switched on yet. If no link arrives, ask a SchediQ administrator to reset your
+                password: they will give you a temporary one to log in with.
+              </p>
             )}
           </div>
         ) : (

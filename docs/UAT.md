@@ -36,6 +36,10 @@ step number.
 | 27 | Course pacing | "Add this course to my schedule" on a 5-lesson course, regenerate | One lesson of that course per day, across 5 days |
 | 28 | Dark mode | Top-bar theme button: Light, then Dark, then System; reload; navigate; print a report in Dark | Theme switches instantly, survives reload and navigation, no light flash on load; text readable everywhere; printout is light |
 | 29 | Task progress | Add a 150-min task due in 2 days, generate (3 blocks), tick the blocks one by one on the calendar; regenerate after the first | Bar reads 33% -> 67% -> 100% and the task shows done; "In progress" panel updates without reloading; regenerating keeps 33% and adds no extra blocks |
+| 30 | Admin password reset | As admin, Users > Reset password on a student > Issue; log in as the student with it; Account > Change password | Temporary password shown once; banner after login; after changing, banner gone and the temporary password no longer works |
+| 31 | Production lockdown | Run the API with `DEMO_MODE=false`; Forgot password; open System & backup | Only the generic message, no link on screen; "Production backups are managed by Neon", buttons disabled |
+| 32 | Rate limits | Wrong password 11 times in a row; 21 AI parses within an hour (Premium account) | 11th login gets "Too many login attempts" (429); 21st parse gets "AI request limit reached" (429) |
+| 33 | Fail-fast config | Start the API with `JWT_SECRET` removed from `.env` | Exits immediately listing "JWT_SECRET is required and must be at least 32 characters" |
 
 Automated checks before a demo:
 

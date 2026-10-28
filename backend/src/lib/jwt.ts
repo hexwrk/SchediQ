@@ -1,20 +1,21 @@
 import jwt from "jsonwebtoken";
+import { env } from "./env";
 
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  throw new Error("JWT_SECRET is not set");
-}
+// JWT_SECRET presence and length (>= 32 chars) are enforced at boot by
+// loadEnv(); reading through env() keeps this module importable in tests.
 
 export interface TokenPayload {
   userId: string;
 }
 
 export function signToken(payload: TokenPayload): string {
-  return jwt.sign(payload, JWT_SECRET as string, {
-    expiresIn: (process.env.JWT_EXPIRES_IN ?? "7d") as jwt.SignOptions["expiresIn"],
+  return jwt.sign(payload, env().JWT_SECRET, {
+    expiresIn: env().JWT_EXPIRES_IN as jwt.SignOptions["expiresIn"],
   });
 }
 
 export function verifyToken(token: string): TokenPayload {
-  return jwt.verify(token, JWT_SECRET as string) as TokenPayload;
+  // Pinned algorithm: never let the token header choose (blocks alg=none and
+  // HS/RS confusion).
+  return jwt.verify(token, env().JWT_SECRET, { algorithms: ["HS256"] }) as TokenPayload;
 }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
+import { PASSWORD_RULE, validatePassword } from "@shared/validation";
 import { accountApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { FieldError, FieldErrors, hasErrors, inputClass, serverFieldErrors } from "@/lib/form";
@@ -10,7 +11,7 @@ import { errorMessage } from "@/lib/use-api";
 
 type Field = "password" | "confirm";
 
-// Profile summary and self-service account deletion.
+// Profile summary, password change and self-service account deletion.
 export default function AccountPage() {
   const { token, user, logout } = useAuth();
   const router = useRouter();
@@ -65,10 +66,9 @@ export default function AccountPage() {
             </Link>
           </dd>
         </dl>
-        <p className="text-xs text-text-muted">
-          Forgot your password? Log out and use &ldquo;Forgot password&rdquo; on the login page.
-        </p>
       </section>
+
+      <ChangePasswordForm />
 
       <form onSubmit={onDelete} noValidate className="flex flex-col gap-3 rounded-card border border-red-200 bg-surface p-5">
         <h2 className="text-sm font-semibold text-red-600">Delete account</h2>
@@ -105,5 +105,110 @@ export default function AccountPage() {
         </div>
       </form>
     </div>
+  );
+}
+
+type PwField = "currentPassword" | "newPassword" | "confirmPassword";
+
+// Change password. Also the step that replaces an admin-issued temporary
+// password: the server clears mustChangePassword, and setUser hides the banner.
+function ChangePasswordForm() {
+  const { token, user, setUser } = useAuth();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [errors, setErrors] = useState<FieldErrors<PwField>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!token) return;
+    setError(null);
+    setNotice(null);
+    const found: FieldErrors<PwField> = {};
+    if (!currentPassword) found.currentPassword = "Enter your current password.";
+    const rule = validatePassword(newPassword);
+    if (rule) found.newPassword = rule;
+    if (confirmPassword !== newPassword) found.confirmPassword = "The two new passwords do not match.";
+    setErrors(found);
+    if (hasErrors(found)) return;
+
+    setSaving(true);
+    try {
+      const res = await accountApi.changePassword(token, currentPassword, newPassword);
+      setUser(res.user);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setNotice(res.message);
+    } catch (err) {
+      const fromServer = serverFieldErrors(err, ["currentPassword", "newPassword"] as const);
+      setErrors(fromServer);
+      if (!hasErrors(fromServer)) setError(errorMessage(err, "Could not change the password"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form id="password" onSubmit={onSubmit} noValidate className="flex scroll-mt-24 flex-col gap-3 rounded-card border border-border bg-surface p-5">
+      <h2 className="text-sm font-semibold">Change password</h2>
+      {user?.mustChangePassword ? (
+        <p className="text-sm text-amber">
+          You signed in with a temporary password from an administrator. Choose your own password now.
+        </p>
+      ) : (
+        <p className="text-sm text-text-muted">{PASSWORD_RULE}</p>
+      )}
+      <label className="flex flex-col gap-1 text-sm">
+        {user?.mustChangePassword ? "Temporary password" : "Current password"}
+        <input
+          type="password"
+          autoComplete="current-password"
+          value={currentPassword}
+          onChange={(e) => setCurrentPassword(e.target.value)}
+          aria-invalid={!!errors.currentPassword}
+          className={inputClass(errors.currentPassword)}
+        />
+        <FieldError message={errors.currentPassword} />
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        New password
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          aria-invalid={!!errors.newPassword}
+          className={inputClass(errors.newPassword)}
+        />
+        <FieldError message={errors.newPassword} />
+      </label>
+      <label className="flex flex-col gap-1 text-sm">
+        Confirm new password
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          aria-invalid={!!errors.confirmPassword}
+          className={inputClass(errors.confirmPassword)}
+        />
+        <FieldError message={errors.confirmPassword} />
+      </label>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {notice && <p className="text-sm text-accent">{notice}</p>}
+      <div>
+        <button
+          type="submit"
+          disabled={saving}
+          className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
+        >
+          {saving ? "Saving..." : "Change password"}
+        </button>
+      </div>
+    </form>
   );
 }

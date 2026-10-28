@@ -3,7 +3,9 @@ import { Prisma } from "@prisma/client";
 import { MulterError } from "multer";
 import { ZodError } from "zod";
 
-export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+// Full detail goes to the server log; clients only ever get a short, generic
+// message for anything unexpected (no stack traces, SQL or internal paths).
+export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   if (err instanceof ZodError) {
     // details.fieldErrors maps each field to its messages; the frontend shows
     // them inline under the matching input. The first message is surfaced in
@@ -27,6 +29,16 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     return res.status(400).json({ error: `Upload rejected: ${err.message}` });
   }
 
-  console.error(err);
+  // Client errors raised by Express/body-parser (malformed JSON, body too
+  // large). They carry an HTTP status and are safe to classify, but the raw
+  // parser message is replaced with a fixed one.
+  const status = (err as { status?: unknown })?.status;
+  if (typeof status === "number" && status >= 400 && status < 500) {
+    const message =
+      status === 413 ? "Request body too large." : status === 400 ? "Malformed request body." : "Bad request.";
+    return res.status(status).json({ error: message });
+  }
+
+  console.error(`Unhandled error on ${req.method} ${req.path}:`, err);
   return res.status(500).json({ error: "Internal server error" });
 }

@@ -17,7 +17,7 @@ with a healthcheck and a named volume for persistence.
 
 ```bash
 cd backend
-cp .env.example .env            # then set a real JWT_SECRET
+cp .env.example .env            # then set JWT_SECRET (openssl rand -base64 48)
 npm install
 npx prisma migrate deploy       # applies every migration in order (see list below)
 npx prisma generate
@@ -29,30 +29,42 @@ Migrations, in order: `init`, `scheduling_prefs`, `session_completion`,
 `roles_tiers` (role + account tier, AI parse log, backup log),
 `require_user_name` (backfills null names from the email local part, then sets
 NOT NULL), `courses_lessons` (Course, Lesson, Course.subjectId, Task.lessonId),
-`password_reset` (hashed, single-use reset tokens).
+`password_reset` (hashed, single-use reset tokens), `task_in_progress` and
+`backfill_in_progress` (IN_PROGRESS status), `must_change_password` (flag set
+by an admin-issued temporary password).
 
 Tests (Node's built-in runner, no extra framework):
 
 ```bash
-cd backend && npm test          # scheduler, mastery, shared validators, rule parser
+cd backend && npm test          # scheduler, mastery, validators, rule parser, task progress, env validation
 ```
 
-Health check: `curl localhost:4000/api/health` returns `{"status":"ok"}`.
+Health checks: `curl localhost:4000/api/health` returns `{"status":"ok"}`;
+`curl localhost:4000/api/health/db` returns `{"status":"ok","latencyMs":...}`
+(503 `{"status":"fail"}` if the database is unreachable).
 
-The backend `.env` needs:
+The backend `.env` (every variable is documented in `backend/.env.example` and
+validated at boot by `src/lib/env.ts`; a missing or invalid one stops the API
+with a list of what to fix):
 
 ```
 DATABASE_URL="postgresql://schediq:schediq@localhost:5432/schediq"
-JWT_SECRET="<a long random string>"
+DIRECT_URL="postgresql://schediq:schediq@localhost:5432/schediq"
+JWT_SECRET="<openssl rand -base64 48, at least 32 characters>"
 JWT_EXPIRES_IN="7d"
 PORT=4000
 CORS_ORIGIN="http://localhost:3000"
 AI_PARSER=rule
 OPENAI_API_KEY=""
-BACKUP_MODE=auto
+DEMO_MODE=true
 APP_URL="http://localhost:3000"
-RESET_DEMO_MODE=true
+BACKUP_MODE=auto
 ```
+
+`DIRECT_URL` is read by every Prisma migrate command (on Neon it is the
+non-pooled URL); locally it is the same database. `DEMO_MODE=true` is local
+only: it shows password reset links in the UI and enables in-app backups. It
+replaces the old `RESET_DEMO_MODE`.
 
 `npm run build` compiles to `dist/backend/src/index.js` (the backend's
 `rootDir` is the repo root so it can compile `shared/validation.ts`); `npm start`
@@ -68,7 +80,9 @@ npm run dev                     # app on http://localhost:3000
 ```
 
 `next.config.ts` sets `turbopack.root` to the repo root so the frontend can
-import `shared/validation.ts` (the same validator file the backend uses).
+import `shared/validation.ts` (the same validator file the backend uses). A
+`prebuild` preflight (`scripts/check-build-env.mjs`) stops the build early if
+`../shared` is missing or, on Vercel, if `NEXT_PUBLIC_API_URL` is unset.
 
 ## 4. Accounts and the walkthrough
 
@@ -78,8 +92,10 @@ The seed creates exactly one account; there are no demo users or demo data.
 | --- | --- | --- |
 | `admin@schediq.app` | `admin1234` | SUPER_ADMIN, PREMIUM (admin users, System & backup, Data model, Admin report) |
 
-Change that password (or delete the account) on anything that is not a local
-install. Students register themselves at `/register` and start on the FREE tier.
+`admin1234` is the local default only. With `NODE_ENV=production` the seed
+refuses to run unless `SEED_ADMIN_PASSWORD` is set, and the password can be
+changed any time on **Account > Change password**. Students register themselves
+at `/register` and start on the FREE tier.
 
 ### The connected use case (walkthrough with a fresh account)
 
@@ -224,7 +240,9 @@ opens `/admin` sees an "Access denied" page.
 
 - **Users**: every account with role, tier and counts. Change role or tier.
   Delete requires typing the account's email. Admins cannot demote or delete
-  themselves.
+  themselves. **Reset password** issues a one-time temporary password, shown
+  to the admin once; the user is asked to change it after logging in (account
+  recovery without email).
 - **System & backup**: live counts and database size, plus:
   - **Create backup**: `POST /api/admin/backup` runs `pg_dump` (execFile with
     an argument array, password in `PGPASSWORD`) and downloads a timestamped
@@ -236,6 +254,9 @@ opens `/admin` sees an "Access denied" page.
     file changes nothing.
   - The host's `pg_dump`/`psql` major version must match the server
     (postgres:16). Otherwise backup falls back to JSON; restore JSON instead.
+  - Backup and restore are a local/demo feature: with `DEMO_MODE=false`
+    (production, Neon) the page says "Production backups are managed by Neon"
+    and the buttons are disabled.
 - **Data model**: the seven entities, their relationships in plain language, a
   diagram, and live row counts. Built for presentations.
 
@@ -267,6 +288,12 @@ Both the task parser and the course generator run offline by default. To use Ope
 The model is `gpt-4o-mini` (the `MODEL` constant in `ai.controller.ts` and
 `courses.controller.ts`). Both prompts treat user text strictly as data (a
 prompt-injection guard). On any failure, both fall back to the offline path.
+
+`lib/openai.ts` builds every client with a 20 s timeout and one retry (the SDK
+retries only connection errors, 408/409/429 and 5xx), and each call caps its
+output tokens. Failures are logged as one line with the error class, status
+and code; the key and the prompt are never logged. AI endpoints are rate
+limited to 20 requests per hour per user (`429`).
 
 ## 13. Scheduler robustness
 
@@ -325,9 +352,12 @@ Deleting a course deletes its lessons. Its tasks are kept and just unlinked.
 - **Forgot password** (link on the login page): `POST /api/auth/forgot` creates a
   30-minute, single-use token (stored as a SHA-256 hash), then
   `/reset-password?token=...` sets a new password via `POST /api/auth/reset`.
-  **Demo mode:** there is no email service, so the reset link is shown on screen
-  and printed in the API console (`[demo mail] ...`). Set `RESET_DEMO_MODE=false`
-  to stop returning it in the response.
+  There is no email service yet. With `DEMO_MODE=true` (local) the link is
+  shown on screen. With `DEMO_MODE=false` (production) the response is only the
+  generic message and the link is written to the API log (`[reset] ...`); users
+  recover through an admin-issued temporary password instead.
+- **Change password** (Account page): `POST /api/account/password` with the
+  current and new password. Also clears an admin-issued temporary password.
 - **Delete account** (Account page): requires the current password and typing
   DELETE. Cascades to everything the user owns. The only remaining super admin
   cannot delete themselves.
@@ -401,6 +431,22 @@ choice is saved in `localStorage` (`schediq_theme`).
   whatever theme is on screen.
 
 See `docs/UAT.md` for the user acceptance test checklist.
+
+## 20. Production configuration
+
+Deploying to Vercel + Render + Neon is covered step by step in
+`docs/DEPLOYMENT.md` (exact platform settings, env vars, post-deploy checks).
+What the code does for production:
+
+- Env validation at boot (`backend/src/lib/env.ts`), fail fast with a list.
+- `helmet` security headers, no `X-Powered-By`, `trust proxy` = 1 for Render.
+- CORS allowlist from `CORS_ORIGIN` (comma-separated, `*` refused).
+- Rate limits: 10 requests / 15 min / IP on login, register, forgot, reset and
+  change password; 20 / hour / user on `/api/ai/*` and course generation.
+- One access log line per request (`morgan`, no bodies); generic error
+  responses with full server-side logs.
+- `prisma migrate deploy` for production schema changes (never `migrate dev`).
+- Seed in production requires `SEED_ADMIN_PASSWORD`.
 
 ## Production build check
 

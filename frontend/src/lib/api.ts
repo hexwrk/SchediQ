@@ -96,6 +96,8 @@ export interface AuthUser {
   name: string;
   role: Role;
   accountType: AccountType;
+  // An admin issued a temporary password; the app asks for a new one.
+  mustChangePassword: boolean;
 }
 
 export interface AuthResponse {
@@ -416,6 +418,13 @@ export const accountApi = {
       body: JSON.stringify({ password, confirm: "DELETE" }),
       token,
     }),
+  // Self-service password change; also clears an admin-issued temporary password.
+  changePassword: (token: string, currentPassword: string, newPassword: string) =>
+    request<{ user: AuthUser; message: string }>("/api/account/password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
+      token,
+    }),
   setTier: (token: string, accountType: AccountType) =>
     request<{ user: AuthUser; usage: { aiParses: Usage } }>("/api/account/tier", {
       method: "PATCH",
@@ -526,6 +535,7 @@ export interface AdminUser {
   name: string;
   role: Role;
   accountType: AccountType;
+  mustChangePassword: boolean;
   createdAt: string;
   taskCount: number;
   subjectCount: number;
@@ -549,6 +559,8 @@ export interface AdminStats {
   databaseSizeBytes: number;
   lastBackup: BackupLogEntry | null;
   lastRestore: BackupLogEntry | null;
+  // In-app backup is a local/demo feature; production backups are Neon's.
+  backup: { enabled: boolean; message: string | null; pgDumpAvailable: boolean };
   generatedAt: string;
 }
 
@@ -568,6 +580,12 @@ export const adminApi = {
     }),
   deleteUser: (token: string, id: string) =>
     request<void>(`/api/admin/users/${id}`, { method: "DELETE", token }),
+  // Issues a one-time temporary password, returned ONCE in this response.
+  resetPassword: (token: string, id: string) =>
+    request<{ email: string; temporaryPassword: string }>(`/api/admin/users/${id}/reset-password`, {
+      method: "POST",
+      token,
+    }),
   stats: (token: string) => request<AdminStats>("/api/admin/stats", { token }),
   dataModel: (token: string) => request<DataModel>("/api/admin/data-model", { token }),
   backup: (token: string) => requestFile("/api/admin/backup", token, { method: "POST" }),

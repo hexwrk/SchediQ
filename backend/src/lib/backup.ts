@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { z } from "zod";
+import { env } from "./env";
 import { prisma } from "./prisma";
 
 // System backup / restore for the super-admin System page.
@@ -40,20 +41,21 @@ interface PgConn {
   user: string;
   password: string;
   database: string;
+  // From ?sslmode= on the URL (Neon requires "require"); libpq reads PGSSLMODE.
+  sslmode: string | null;
 }
 
 // Split DATABASE_URL into libpq parts. WHATWG URL handles percent-encoded
 // passwords, so decode them before handing them to PGPASSWORD.
 function pgConn(): PgConn {
-  const raw = process.env.DATABASE_URL;
-  if (!raw) throw new Error("DATABASE_URL is not set");
-  const url = new URL(raw);
+  const url = new URL(env().DATABASE_URL);
   return {
     host: url.hostname,
     port: url.port || "5432",
     user: decodeURIComponent(url.username),
     password: decodeURIComponent(url.password),
     database: decodeURIComponent(url.pathname.replace(/^\//, "")),
+    sslmode: url.searchParams.get("sslmode"),
   };
 }
 
@@ -64,6 +66,7 @@ function pgEnv(conn: PgConn): NodeJS.ProcessEnv {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
     PGPASSWORD: conn.password,
     PGCONNECT_TIMEOUT: "10",
+    ...(conn.sslmode ? { PGSSLMODE: conn.sslmode } : {}),
   };
 }
 
@@ -78,7 +81,7 @@ function timestamp(now: Date): string {
 
 async function pgDump(conn: PgConn): Promise<Buffer> {
   const { stdout } = await execFileAsync(
-    process.env.PG_DUMP_PATH || "pg_dump",
+    env().PG_DUMP_PATH ?? "pg_dump",
     [
       ...connArgs(conn),
       "--format=plain",
@@ -139,10 +142,52 @@ async function jsonExport(now: Date): Promise<Buffer> {
   return Buffer.from(JSON.stringify(payload, null, 2), "utf8");
 }
 
+// ---------- Availability ----------
+//
+// In production the database is Neon, which has its own backups and
+// point-in-time restore, and Render's Node image has no pg_dump/psql. The UI
+// backup/restore is therefore a local/demo feature: it is turned off when
+// DEMO_MODE=false, and also on a production host without pg_dump (even if
+// DEMO_MODE was left on by mistake). Locally without pg_dump the JSON export
+// still works, so it stays on there.
+
+export const MANAGED_BACKUP_MESSAGE =
+  "Production backups are managed by Neon (automatic backups and point-in-time restore in the Neon console). In-app backup and restore are turned off.";
+
+export interface BackupStatus {
+  enabled: boolean;
+  // Shown to the admin: why it is off, or a note about the JSON fallback.
+  message: string | null;
+  pgDumpAvailable: boolean;
+}
+
+let pgDumpProbe: Promise<boolean> | null = null;
+
+// Cached for the process lifetime: the binary does not appear mid-run.
+function pgDumpAvailable(): Promise<boolean> {
+  pgDumpProbe ??= execFileAsync(env().PG_DUMP_PATH ?? "pg_dump", ["--version"], { timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  return pgDumpProbe;
+}
+
+export async function backupStatus(): Promise<BackupStatus> {
+  const e = env();
+  const hasPgDump = await pgDumpAvailable();
+  if (!e.DEMO_MODE || (e.NODE_ENV === "production" && !hasPgDump)) {
+    return { enabled: false, message: MANAGED_BACKUP_MESSAGE, pgDumpAvailable: hasPgDump };
+  }
+  return {
+    enabled: true,
+    message: hasPgDump ? null : "pg_dump is not installed on the API host, so backups use the JSON export.",
+    pgDumpAvailable: hasPgDump,
+  };
+}
+
 // Produce a backup file. BACKUP_MODE=json forces the logical export (handy on a
 // host without pg_dump); the default "auto" tries pg_dump first.
 export async function createBackup(now = new Date()): Promise<BackupFile> {
-  const mode = process.env.BACKUP_MODE ?? "auto";
+  const mode = env().BACKUP_MODE;
   let fallbackReason: string | undefined;
 
   if (mode !== "json") {
@@ -195,7 +240,7 @@ async function restoreSql(data: Buffer): Promise<void> {
   // --single-transaction + ON_ERROR_STOP: the whole dump applies or nothing
   // does, so a bad file cannot leave the database half-restored.
   const run = execFileAsync(
-    process.env.PSQL_PATH || "psql",
+    env().PSQL_PATH ?? "psql",
     [...connArgs(conn), "--no-psqlrc", "--quiet", "--single-transaction", "-v", "ON_ERROR_STOP=1", "--file", "-"],
     { env: pgEnv(conn), maxBuffer: 16 * 1024 * 1024, timeout: CHILD_TIMEOUT_MS }
   );

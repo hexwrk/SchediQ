@@ -3,7 +3,8 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { aiUsageFor } from "../lib/tier";
-import { toPublicUser } from "./auth.controller";
+import { passwordField } from "../lib/validators";
+import { BCRYPT_ROUNDS, toPublicUser } from "./auth.controller";
 
 const tierSchema = z.object({
   accountType: z.enum(["FREE", "PREMIUM"], { message: "Tier must be FREE or PREMIUM." }),
@@ -33,6 +34,44 @@ export async function updateTier(req: Request, res: Response) {
   });
   const usage = await aiUsageFor(user.id, user.accountType);
   return res.json({ user: toPublicUser(user), usage: { aiParses: usage } });
+}
+
+const passwordSchema = z.object({
+  currentPassword: z.string().min(1, "Enter your current password."),
+  newPassword: passwordField,
+});
+
+// POST /api/account/password  { currentPassword, newPassword }
+// Self-service password change (also how an admin-issued temporary password
+// is replaced). Re-checks the current password so a stolen token alone cannot
+// take over the account, then burns any outstanding reset links.
+export async function changePassword(req: Request, res: Response) {
+  const { currentPassword, newPassword } = passwordSchema.parse(req.body);
+  const user = await prisma.user.findUnique({ where: { id: req.userId } });
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
+    return res.status(400).json({
+      error: "Current password is incorrect.",
+      details: { fieldErrors: { currentPassword: ["Current password is incorrect."] } },
+    });
+  }
+  if (await bcrypt.compare(newPassword, user.passwordHash)) {
+    return res.status(400).json({
+      error: "Choose a password different from the current one.",
+      details: { fieldErrors: { newPassword: ["Choose a password different from the current one."] } },
+    });
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+  const [updated] = await prisma.$transaction([
+    prisma.user.update({ where: { id: user.id }, data: { passwordHash, mustChangePassword: false } }),
+    prisma.passwordResetToken.updateMany({
+      where: { userId: user.id, usedAt: null },
+      data: { usedAt: new Date() },
+    }),
+  ]);
+  return res.json({ user: toPublicUser(updated), message: "Password changed." });
 }
 
 const deleteSchema = z.object({

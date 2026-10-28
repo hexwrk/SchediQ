@@ -27,8 +27,14 @@ shown in code.
   hash, so response time does not reveal whether the account exists.
 - Emails are stored lower-cased and matched case-insensitively, so
   `Tristan@Gmail.com` and `tristan@gmail.com` cannot be two different accounts.
+- **Rate limiting** (`express-rate-limit`,
+  `backend/src/middleware/rateLimit.middleware.ts`): login, register, forgot,
+  reset and change password each allow 10 requests per 15 minutes per IP, then
+  `429` with a clear message and standard `RateLimit` headers. `trust proxy` is
+  set to exactly one hop (Render's proxy), so the client IP comes from
+  `X-Forwarded-For` without letting a client spoof it.
 
-## 2b. Forgot password (DEMO MODE) and account deletion
+## 2b. Password recovery, change and account deletion
 
 - `POST /api/auth/forgot` always answers with the same generic message, whether
   or not the email is registered, so it cannot be used to enumerate accounts.
@@ -39,12 +45,21 @@ shown in code.
 - Tokens expire after **30 minutes** and are **single use**. Requesting a new link,
   or using one, burns every other outstanding link for that account.
 - The new password goes through the same shared validator and bcrypt (12 rounds).
-- **Demo mode (documented limitation):** there is no email service, so the API
-  returns the reset link in the response and logs it as `[demo mail] ...`. That
-  is only acceptable locally: it hands the link to whoever submits the form,
-  which in production would allow account takeover by email address. It is on by
-  default only when `NODE_ENV` is not `production`; `RESET_DEMO_MODE=false` turns
-  it off (the link is then only logged, ready to be swapped for a real mailer).
+- **No email service yet.** With `DEMO_MODE=true` (local only) the API returns
+  the reset link in the response so the flow can be tested. In production
+  (`DEMO_MODE=false`, the default) the response is ONLY the generic message:
+  returning the link would hand it to whoever typed the email, i.e. account
+  takeover. The link is written to the server log (`[reset] ...`), so log
+  access is sensitive until a real mailer replaces it.
+- **Admin recovery without email:** `POST /api/admin/users/:id/reset-password`
+  (super admin only, not for the admin's own account) sets a random temporary
+  password (16 chars from a 31-symbol alphabet via `crypto.randomInt`, ~79
+  bits), burns outstanding reset links, sets `mustChangePassword`, and returns
+  the password once with `Cache-Control: no-store`. It is never logged; the log
+  records only who reset whom. The user sees a banner until they change it.
+- **Change password:** `POST /api/account/password` re-checks the current
+  password, refuses reusing it, clears `mustChangePassword` and burns
+  outstanding reset links.
 - `DELETE /api/account` requires the **current password** (a stolen token alone
   cannot destroy an account) plus `confirm: "DELETE"`. It cascades to all owned
   rows. The last remaining SUPER_ADMIN cannot delete themselves.
@@ -52,8 +67,10 @@ shown in code.
 ## 3. Sessions: JWT bearer tokens
 
 - On login or register the API signs a JWT containing only `{ userId }`, with
-  `JWT_SECRET` from the environment (the server refuses to start without it) and
-  an expiry of `JWT_EXPIRES_IN` (default 7 days). See `backend/src/lib/jwt.ts`.
+  `JWT_SECRET` from the environment (the server refuses to start unless it is
+  at least 32 characters, see `backend/src/lib/env.ts`) and an expiry of
+  `JWT_EXPIRES_IN` (default 7 days). Verification pins `HS256`, so a token's
+  header cannot pick the algorithm. See `backend/src/lib/jwt.ts`.
 - Every data route uses `requireAuth`
   (`backend/src/middleware/auth.middleware.ts`), which verifies the signature and
   expiry and sets `req.userId`. Missing or invalid tokens get `401`.
@@ -136,6 +153,9 @@ Every query for user data is scoped to the authenticated user:
   use superuser features such as `COPY ... PROGRAM`.
 - Every backup and restore is written to `BackupLog` with timestamp, format,
   size and the admin's email.
+- In production (`DEMO_MODE=false`, or a production host without `pg_dump`)
+  both endpoints return `409 BACKUP_DISABLED` and the UI explains that Neon
+  manages backups, so no database dump can be pulled through the web app.
 
 ## 8. Account tiers
 
@@ -145,17 +165,31 @@ UPGRADE_REQUIRED`, not just hidden in the UI. Known gap: the daily parse check
 is count-then-insert, so two simultaneous requests at the boundary could both
 pass. A real billing limit would use a row lock.
 
-## 9. Known gaps / next steps
+## 9. Transport, headers, configuration and logging
 
-- No rate limiting on `/api/auth/login` yet (add `express-rate-limit` keyed by IP
-  and email, plus lockout or backoff).
+- `helmet` on every response: HSTS, `X-Content-Type-Options: nosniff`, a strict
+  CSP, `frame-ancestors`, and no `X-Powered-By` (also disabled explicitly).
+- CORS is an allowlist from `CORS_ORIGIN` (comma-separated exact origins). `*`
+  and malformed origins are rejected at boot. Other origins get no CORS headers.
+- All configuration is validated at boot with zod. A missing or weak value
+  stops the server and lists every problem, without echoing values.
+- Error responses are generic (`Internal server error`, `Malformed request
+  body.`); full errors go to the server log only. Access logs (`morgan`) record
+  method, path, status, size and latency, never bodies or headers.
+- OpenAI calls: 20 s timeout, one retry on transient errors, capped output
+  tokens, 20 requests / hour / user. Failures log the error class, status and
+  code with anything key-shaped redacted; never the key or the user's prompt.
+  Every failure falls back to the offline parser/templates.
+
+## 10. Known gaps / next steps
+
+- Rate limit counters are in memory (per process). Correct for one instance;
+  multiple instances need a shared store such as Redis.
 - No refresh tokens or server-side token revocation. Logout clears the client
   token only. A role change is enforced immediately for admin routes because the
   role is read from the DB, and a deleted account's token stops working (the user
   no longer exists). A **password reset does not yet invalidate JWTs already
   issued**; the fix is a `tokenVersion` (or `passwordChangedAt`) on User, checked
   by `requireAuth`.
-- No rate limiting on `/api/auth/forgot` either (pair with the login limiter).
-- CORS defaults to `*` when `CORS_ORIGIN` is unset. Always set it outside local
-  development.
-- No security headers middleware (helmet, CSP) on the API yet.
+- Password reset links are logged server-side in production until a mailer
+  (e.g. Resend) is added.

@@ -1,7 +1,11 @@
+import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { Request, Response } from "express";
 import { z } from "zod";
+import { validatePassword } from "../../../shared/validation";
 import { prisma } from "../lib/prisma";
-import { RestoreError, createBackup, restoreBackup } from "../lib/backup";
+import { RestoreError, backupStatus, createBackup, restoreBackup } from "../lib/backup";
+import { BCRYPT_ROUNDS } from "./auth.controller";
 
 // Super-admin module. Every route here is mounted behind requireAuth AND
 // requireSuperAdmin in app.ts; nothing in this file re-checks the role.
@@ -42,6 +46,7 @@ export async function listUsers(_req: Request, res: Response) {
         name: true,
         role: true,
         accountType: true,
+        mustChangePassword: true,
         createdAt: true,
         _count: { select: { tasks: true, subjects: true } },
       },
@@ -98,9 +103,62 @@ export async function deleteUser(req: Request, res: Response) {
   return res.status(204).send();
 }
 
+// ---------- Admin password reset ----------
+//
+// The account-recovery path that works without email: the admin issues a
+// temporary password, sees it ONCE, and passes it to the user out of band. The
+// user is then asked to choose their own (mustChangePassword).
+
+// No look-alike characters (0/O, 1/l/I) so it can be read out or retyped.
+const TEMP_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+const TEMP_GROUPS = 4;
+const TEMP_GROUP_LEN = 4;
+
+// crypto.randomInt is a CSPRNG with no modulo bias. 16 chars from 31 symbols is
+// ~79 bits: far beyond online guessing, and the password is short-lived anyway.
+// Regenerated until it meets the shared password rule (needs a letter and a
+// digit), which almost every draw already does.
+export function temporaryPassword(): string {
+  for (;;) {
+    const groups = Array.from({ length: TEMP_GROUPS }, () =>
+      Array.from({ length: TEMP_GROUP_LEN }, () => TEMP_ALPHABET[crypto.randomInt(TEMP_ALPHABET.length)]).join("")
+    );
+    const pw = groups.join("-");
+    if (validatePassword(pw) === null) return pw;
+  }
+}
+
+// POST /api/admin/users/:id/reset-password
+export async function resetUserPassword(req: Request, res: Response) {
+  const id = idParam.parse(req.params.id);
+  // An admin changes their own password on the Account page (which checks the
+  // current one); this route is for recovering OTHER accounts.
+  if (id === req.userId) {
+    return res.status(400).json({ error: "Change your own password on the Account page." });
+  }
+  const existing = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true } });
+  if (!existing) {
+    return res.status(404).json({ error: "User not found" });
+  }
+
+  const temp = temporaryPassword();
+  const passwordHash = await bcrypt.hash(temp, BCRYPT_ROUNDS);
+  await prisma.$transaction([
+    prisma.user.update({ where: { id }, data: { passwordHash, mustChangePassword: true } }),
+    // Any reset link already sent for this account stops working.
+    prisma.passwordResetToken.updateMany({ where: { userId: id, usedAt: null }, data: { usedAt: new Date() } }),
+  ]);
+  // Audit line WITHOUT the password: who reset whom, and when (log timestamp).
+  console.log(`[admin] ${await actorEmail(req.userId)} issued a temporary password for ${existing.email}`);
+
+  // Shown once. no-store keeps it out of browser and proxy caches.
+  res.setHeader("Cache-Control", "no-store");
+  return res.json({ email: existing.email, temporaryPassword: temp });
+}
+
 // GET /api/admin/stats
 export async function getStats(_req: Request, res: Response) {
-  const [users, tasks, sessions, completedSessions, subjects, byRole, byTier, size, lastBackup, lastRestore] =
+  const [users, tasks, sessions, completedSessions, subjects, byRole, byTier, size, lastBackup, lastRestore, backup] =
     await Promise.all([
       prisma.user.count(),
       prisma.task.count(),
@@ -112,6 +170,7 @@ export async function getStats(_req: Request, res: Response) {
       prisma.$queryRaw<{ bytes: bigint }[]>`SELECT pg_database_size(current_database()) AS bytes`,
       prisma.backupLog.findFirst({ where: { kind: "BACKUP" }, orderBy: { createdAt: "desc" } }),
       prisma.backupLog.findFirst({ where: { kind: "RESTORE" }, orderBy: { createdAt: "desc" } }),
+      backupStatus(),
     ]);
 
   return res.json({
@@ -122,6 +181,7 @@ export async function getStats(_req: Request, res: Response) {
     databaseSizeBytes: Number(size[0]?.bytes ?? 0),
     lastBackup,
     lastRestore,
+    backup,
     generatedAt: new Date().toISOString(),
   });
 }
@@ -135,6 +195,10 @@ async function actorEmail(userId: string | undefined): Promise<string> {
 // POST /api/admin/backup
 // Responds with the backup file itself as an attachment download.
 export async function createBackupHandler(req: Request, res: Response) {
+  const status = await backupStatus();
+  if (!status.enabled) {
+    return res.status(409).json({ error: status.message, code: "BACKUP_DISABLED" });
+  }
   const backup = await createBackup();
 
   // Logged AFTER the dump, so a backup never contains its own log entry.
@@ -163,6 +227,10 @@ export async function createBackupHandler(req: Request, res: Response) {
 // The UI makes the admin type RESTORE first; the server additionally requires
 // confirm=RESTORE in the form body so a stray request cannot trigger it.
 export async function restoreHandler(req: Request, res: Response) {
+  const status = await backupStatus();
+  if (!status.enabled) {
+    return res.status(409).json({ error: status.message, code: "BACKUP_DISABLED" });
+  }
   const file = req.file;
   if (!file) {
     return res.status(400).json({ error: "Choose a backup file to restore." });

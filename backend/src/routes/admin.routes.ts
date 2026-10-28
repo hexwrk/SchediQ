@@ -6,6 +6,7 @@ import {
   getDataModel,
   getStats,
   listUsers,
+  resetUserPassword,
   restoreHandler,
   updateUser,
 } from "../controllers/admin.controller";
@@ -28,6 +29,7 @@ const upload = multer({
 router.get("/users", listUsers);
 router.patch("/users/:id", updateUser);
 router.delete("/users/:id", deleteUser);
+router.post("/users/:id/reset-password", resetUserPassword);
 router.get("/stats", getStats);
 router.get("/data-model", getDataModel);
 router.post("/backup", createBackupHandler);

@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { aiEnabled, logAiFailure, openAiClient } from "../lib/openai";
 import { aiUsageFor } from "../lib/tier";
 
 // AI task parser. The AI is used STRICTLY for parsing free text into structured
@@ -9,11 +10,13 @@ import { aiUsageFor } from "../lib/tier";
 //   - openai: OpenAI Structured Outputs, falling back to the rule parser on any
 //             failure so the endpoint can never hard-fail on the model.
 //
-// Which path runs is controlled by the AI_PARSER env var, read per-request so
-// flipping it needs no rebuild.
+// Which path runs is controlled by AI_PARSER (validated at boot, lib/env.ts).
+// Timeout, retry and failure logging live in lib/openai.ts.
 
 // Single place to change the model.
 const MODEL = "gpt-4o-mini";
+// The structured reply is ~100 tokens; the cap bounds cost if the model rambles.
+const MAX_OUTPUT_TOKENS = 300;
 
 // Cap input length defensively: bounds token cost and the regex work, and
 // limits prompt-injection surface.
@@ -217,9 +220,7 @@ async function openAiParse(
   subjects: UserSubject[],
   now: Date
 ): Promise<ParsedTask> {
-  // Imported lazily so the package is only loaded when actually used.
-  const OpenAI = (await import("openai")).default;
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const client = await openAiClient();
 
   const subjectNames = subjects.map((s) => s.name);
 
@@ -242,6 +243,7 @@ async function openAiParse(
   const completion = await client.chat.completions.create({
     model: MODEL,
     temperature: 0,
+    max_completion_tokens: MAX_OUTPUT_TOKENS,
     messages: [
       { role: "system", content: system },
       { role: "user", content: text },
@@ -330,16 +332,14 @@ export async function parseTask(req: Request, res: Response) {
     select: { id: true, name: true, cognitiveCategory: true },
   });
 
-  const mode = process.env.AI_PARSER ?? "rule";
-
-  if (mode === "openai" && process.env.OPENAI_API_KEY) {
+  if (aiEnabled()) {
     try {
       const result = await openAiParse(clipped, subjects, now);
       return res.json(result);
     } catch (err) {
       // On ANY failure (network, quota, bad JSON, schema) fall back to the rule
       // parser and label the source so the client knows the AI path degraded.
-      console.error("OpenAI parse failed, falling back to rule parser:", err);
+      logAiFailure("task parse", err);
       return res.json(ruleParse(clipped, subjects, now, "fallback"));
     }
   }

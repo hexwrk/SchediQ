@@ -8,8 +8,9 @@ import { FieldError, inputClass } from "@/lib/form";
 import { EmptyState, ErrorState, LoadingState } from "@/lib/states";
 import { errorMessage, useApi } from "@/lib/use-api";
 
-// Super admin: every account, with role/tier controls and delete. All changes
-// go through /api/admin/users, which the server gates with requireSuperAdmin.
+// Super admin: every account, with role/tier controls, password reset and
+// delete. All changes go through /api/admin/users, which the server gates with
+// requireSuperAdmin.
 export default function AdminUsersPage() {
   const { token, user: me } = useAuth();
   const { data, error: loadError, errorStatus, loading, reload, reloading } = useApi("admin-users", (t) =>
@@ -23,8 +24,51 @@ export default function AdminUsersPage() {
   const [deleting, setDeleting] = useState<AdminUser | null>(null);
   const [confirmText, setConfirmText] = useState("");
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  // Password reset: confirm first, then show the temporary password ONCE. It
+  // only lives in this component state and is dropped when the dialog closes.
+  const [resetting, setResetting] = useState<AdminUser | null>(null);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [issued, setIssued] = useState<{ email: string; temporaryPassword: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const load = reload;
+
+  async function confirmReset() {
+    if (!token || !resetting) return;
+    setResetBusy(true);
+    setResetError(null);
+    try {
+      const res = await adminApi.resetPassword(token, resetting.id);
+      setIssued(res);
+      setCopied(false);
+      setNotice(`Temporary password issued for ${res.email}.`);
+      await load();
+    } catch (err) {
+      setResetError(errorMessage(err, "Password reset failed"));
+    } finally {
+      setResetBusy(false);
+    }
+  }
+
+  function closeReset() {
+    setResetting(null);
+    setIssued(null);
+    setResetError(null);
+    setCopied(false);
+  }
+
+  async function copyIssued() {
+    if (!issued) return;
+    try {
+      await navigator.clipboard.writeText(issued.temporaryPassword);
+      setCopied(true);
+    } catch {
+      // Clipboard can be blocked (permissions, non-HTTPS); the password is
+      // still selectable on screen.
+      setResetError("Could not copy automatically. Select the password and copy it manually.");
+    }
+  }
 
   async function update(u: AdminUser, data: { role?: Role; accountType?: AccountType }) {
     if (!token) return;
@@ -111,6 +155,9 @@ export default function AdminUsersPage() {
                       {u.name} {self && <span className="text-xs text-text-muted">(you)</span>}
                     </span>
                     <span className="text-xs text-text-muted">{u.email}</span>
+                    {u.mustChangePassword && (
+                      <span className="mt-1 block text-[11px] font-medium text-amber">Temporary password not yet changed</span>
+                    )}
                   </td>
                   <td className="px-4 py-2">
                     <select
@@ -140,16 +187,28 @@ export default function AdminUsersPage() {
                   <td className="px-4 py-2 text-xs text-text-muted">{new Date(u.createdAt).toLocaleDateString()}</td>
                   <td className="px-4 py-2 text-right">
                     {!self && (
-                      <button
-                        onClick={() => {
-                          setDeleting(u);
-                          setConfirmText("");
-                          setConfirmError(null);
-                        }}
-                        className="text-xs text-red-600 hover:underline"
-                      >
-                        Delete
-                      </button>
+                      <span className="flex justify-end gap-3 whitespace-nowrap">
+                        <button
+                          onClick={() => {
+                            setResetting(u);
+                            setIssued(null);
+                            setResetError(null);
+                          }}
+                          className="text-xs text-primary hover:underline"
+                        >
+                          Reset password
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDeleting(u);
+                            setConfirmText("");
+                            setConfirmError(null);
+                          }}
+                          className="text-xs text-red-600 hover:underline"
+                        >
+                          Delete
+                        </button>
+                      </span>
                     )}
                   </td>
                 </tr>
@@ -158,6 +217,57 @@ export default function AdminUsersPage() {
           </tbody>
         </table>
       </div>
+
+      {resetting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" role="dialog" aria-modal aria-labelledby="reset-title">
+          <div className="flex w-full max-w-md flex-col gap-3 rounded-card border border-border bg-surface p-6">
+            <h2 id="reset-title" className="text-lg font-semibold">
+              {issued ? "Temporary password" : "Reset password?"}
+            </h2>
+            {issued ? (
+              <>
+                <p className="text-sm text-text-muted">
+                  Give this to <span className="font-medium text-text">{issued.email}</span> privately (in person or a
+                  direct message). It is shown <span className="font-medium text-text">only once</span>. They will be asked
+                  to choose a new password after logging in.
+                </p>
+                <code className="select-all break-all rounded-lg border border-input bg-bg px-3 py-2 text-center font-mono text-base tracking-wide">
+                  {issued.temporaryPassword}
+                </code>
+                {resetError && <p className="text-sm text-red-600">{resetError}</p>}
+                <div className="flex justify-end gap-2">
+                  <button onClick={copyIssued} className="rounded-lg border border-border px-4 py-2 text-sm">
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                  <button onClick={closeReset} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90">
+                    Done
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-text-muted">
+                  Replaces the password of <span className="font-medium text-text">{resetting.email}</span> with a new
+                  temporary one. Their current password and any reset links stop working immediately.
+                </p>
+                {resetError && <p className="text-sm text-red-600">{resetError}</p>}
+                <div className="flex justify-end gap-2">
+                  <button onClick={closeReset} className="rounded-lg border border-border px-4 py-2 text-sm">
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmReset}
+                    disabled={resetBusy}
+                    className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
+                  >
+                    {resetBusy ? "Resetting..." : "Issue temporary password"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {deleting && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" role="dialog" aria-modal>
