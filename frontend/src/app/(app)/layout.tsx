@@ -7,14 +7,21 @@ import { useAuth } from "@/lib/auth-context";
 import { ProgressProvider, useProgress } from "@/lib/progress-context";
 import {
   BookIcon,
+  CapIcon,
+  DatabaseIcon,
   FlameIcon,
   GridIcon,
+  LinkIcon,
   ListIcon,
   LogoutIcon,
   PlusIcon,
+  ReportIcon,
   SlidersIcon,
+  StarIcon,
   TrophyIcon,
+  UsersIcon,
 } from "@/lib/icons";
+import { AuthUser } from "@/lib/api";
 import { ComponentType, SVGProps } from "react";
 
 // Shared chrome for every authenticated page: fixed left sidebar + top bar.
@@ -32,18 +39,43 @@ const NAV: NavItem[] = [
   { href: "/add-task", label: "Add task", Icon: PlusIcon },
   { href: "/tasks", label: "Task list", Icon: ListIcon },
   { href: "/subjects", label: "Subjects", Icon: BookIcon },
+  { href: "/courses", label: "Courses", Icon: CapIcon },
   { href: "/progress", label: "Progress", Icon: TrophyIcon },
+  { href: "/reports", label: "Reports", Icon: ReportIcon },
   { href: "/preferences", label: "Preferences", Icon: SlidersIcon },
+  { href: "/upgrade", label: "Upgrade", Icon: StarIcon },
 ];
 
-const PAGE_TITLES: Record<string, string> = {
-  "/dashboard": "Dashboard",
-  "/add-task": "Add task",
-  "/tasks": "Task list",
-  "/subjects": "Subjects",
-  "/progress": "Progress",
-  "/preferences": "Preferences",
-};
+// Rendered ONLY for SUPER_ADMIN. Hiding them is UX, not security: every
+// /api/admin route is independently gated server-side by requireSuperAdmin.
+const ADMIN_NAV: NavItem[] = [
+  { href: "/admin", label: "Users", Icon: UsersIcon },
+  { href: "/admin/system", label: "System & backup", Icon: DatabaseIcon },
+  { href: "/admin/data-model", label: "Data model", Icon: LinkIcon },
+];
+
+// Longest-prefix match so nested routes (/courses/[id]) get their section title.
+const PAGE_TITLES: [string, string][] = [
+  ["/dashboard", "Dashboard"],
+  ["/add-task", "Add task"],
+  ["/tasks", "Task list"],
+  ["/subjects", "Subjects"],
+  ["/courses", "Courses"],
+  ["/progress", "Progress"],
+  ["/reports", "Reports"],
+  ["/preferences", "Preferences"],
+  ["/upgrade", "Upgrade"],
+  ["/admin/system", "System & backup"],
+  ["/admin/data-model", "Data model"],
+  ["/admin", "Admin: users"],
+];
+
+function titleFor(pathname: string): string {
+  const hit = PAGE_TITLES.filter(([p]) => pathname === p || pathname.startsWith(`${p}/`)).sort(
+    (a, b) => b[0].length - a[0].length
+  )[0];
+  return hit?.[1] ?? "SchediQ";
+}
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, token, loading, logout } = useAuth();
@@ -66,30 +98,50 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   // one derived-progress source and the same celebration surface.
   return (
     <ProgressProvider>
-      <Shell pathname={pathname} userLabel={user.name ?? user.email} onLogout={logout}>
+      <Shell pathname={pathname} user={user} onLogout={logout}>
         {children}
       </Shell>
     </ProgressProvider>
   );
 }
 
+function NavLink({ href, label, Icon, active }: NavItem & { active: boolean }) {
+  return (
+    <Link
+      href={href}
+      className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+        active ? "bg-primary/10 text-primary" : "text-text-muted hover:bg-bg hover:text-text"
+      }`}
+    >
+      <Icon className="shrink-0" />
+      {label}
+    </Link>
+  );
+}
+
 function Shell({
   pathname,
-  userLabel,
+  user,
   onLogout,
   children,
 }: {
   pathname: string;
-  userLabel: string;
+  user: AuthUser;
   onLogout: () => void;
   children: React.ReactNode;
 }) {
-  const title = PAGE_TITLES[pathname] ?? "SchediQ";
+  const title = titleFor(pathname);
+  const userLabel = user.name || user.email;
+  const isAdmin = user.role === "SUPER_ADMIN";
+  // Active = exact match or a nested route, except /admin which would otherwise
+  // light up for every admin sub-page.
+  const isActive = (href: string) =>
+    pathname === href || (href !== "/admin" && pathname.startsWith(`${href}/`));
 
   return (
     <div className="flex min-h-screen bg-bg text-text">
       {/* Fixed left sidebar */}
-      <aside className="fixed inset-y-0 left-0 flex w-56 flex-col border-r border-border bg-surface">
+      <aside className="fixed inset-y-0 left-0 flex w-56 print:hidden flex-col border-r border-border bg-surface">
         <div className="flex items-center gap-2 px-5 py-5">
           <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-sm font-bold text-white">
             SQ
@@ -97,24 +149,20 @@ function Shell({
           <span className="text-lg font-semibold tracking-tight">SchediQ</span>
         </div>
 
-        <nav className="flex flex-1 flex-col gap-1 px-3">
-          {NAV.map(({ href, label, Icon }) => {
-            const active = pathname === href;
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                  active
-                    ? "bg-primary/10 text-primary"
-                    : "text-text-muted hover:bg-bg hover:text-text"
-                }`}
-              >
-                <Icon className="shrink-0" />
-                {label}
-              </Link>
-            );
-          })}
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3">
+          {NAV.map((item) => (
+            <NavLink key={item.href} {...item} active={isActive(item.href)} />
+          ))}
+          {isAdmin && (
+            <>
+              <span className="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                Super admin
+              </span>
+              {ADMIN_NAV.map((item) => (
+                <NavLink key={item.href} {...item} active={isActive(item.href)} />
+              ))}
+            </>
+          )}
         </nav>
 
         <button
@@ -127,12 +175,13 @@ function Shell({
       </aside>
 
       {/* Main column, offset by the sidebar width */}
-      <div className="flex min-h-screen flex-1 flex-col pl-56">
-        <header className="flex items-center justify-between gap-4 border-b border-border bg-surface px-8 py-4">
+      <div className="flex min-h-screen flex-1 flex-col pl-56 print:pl-0">
+        <header className="flex print:hidden items-center justify-between gap-4 border-b border-border bg-surface px-8 py-4">
           <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
           <div className="flex items-center gap-5 text-sm">
             <Hud />
             <div className="flex items-center gap-3">
+              <TierBadge user={user} />
               <span className="text-text-muted">{userLabel}</span>
               <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
                 {userLabel.slice(0, 1).toUpperCase()}
@@ -141,9 +190,32 @@ function Shell({
           </div>
         </header>
 
-        <main className="flex-1 px-8 py-8">{children}</main>
+        <main className="flex-1 px-8 py-8 print:p-0">{children}</main>
       </div>
     </div>
+  );
+}
+
+// Tier badge: links to /upgrade so the plan is always one click from the UI.
+function TierBadge({ user }: { user: AuthUser }) {
+  const premium = user.accountType === "PREMIUM";
+  return (
+    <span className="flex items-center gap-1.5">
+      {user.role === "SUPER_ADMIN" && (
+        <span className="rounded-full bg-text px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+          Admin
+        </span>
+      )}
+      <Link
+        href="/upgrade"
+        title={premium ? "Premium plan (demo tier)" : "Free plan: click to see Premium"}
+        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+          premium ? "bg-violet text-white" : "bg-bg text-text-muted ring-1 ring-border"
+        }`}
+      >
+        {premium ? "Premium" : "Free"}
+      </Link>
+    </span>
   );
 }
 
@@ -161,7 +233,10 @@ function Hud() {
   return (
     <div className="flex items-center gap-4">
       <div className="flex items-center gap-2">
-        <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+        <span
+          className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary"
+          title={progress.levelTitle}
+        >
           Lv {progress.level}
         </span>
         <div className="hidden sm:block">

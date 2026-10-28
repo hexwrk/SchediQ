@@ -14,6 +14,18 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { SparkIcon } from "@/lib/icons";
+import { NUMBER_LIMITS, TITLE_MAX } from "@shared/validation";
+import {
+  FieldError,
+  FieldErrors,
+  TASK_FIELDS,
+  TaskField,
+  UpgradePrompt,
+  hasErrors,
+  inputClass,
+  serverFieldErrors,
+  validateTaskForm,
+} from "@/lib/form";
 
 const CATEGORIES: CognitiveCategory[] = ["Analytical", "Verbal", "Technical", "General"];
 
@@ -40,7 +52,11 @@ export default function AddTaskPage() {
   // Editable task fields (prefilled by the parser, overridable by the user).
   const [title, setTitle] = useState("");
   const [deadline, setDeadline] = useState("");
-  const [durationMin, setDurationMin] = useState(60);
+  // Raw input string; validated with validateIntInRange before saving.
+  const [durationMin, setDurationMin] = useState("60");
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors<TaskField>>({});
+  // Set when the FREE daily parse cap is hit (402): shows the upgrade prompt.
+  const [upgradeMsg, setUpgradeMsg] = useState<string | null>(null);
   const [priority, setPriority] = useState<TaskPriority>("MEDIUM");
   const [subjectId, setSubjectId] = useState("");
 
@@ -57,12 +73,14 @@ export default function AddTaskPage() {
     if (!token || !text.trim()) return;
     setParsing(true);
     setError(null);
+    setUpgradeMsg(null);
     try {
       const parsed = await aiApi.parse(token, text);
       setParseInfo(parsed);
       setTitle(parsed.title);
       setDeadline(toLocalInput(parsed.deadline));
-      setDurationMin(parsed.durationMin);
+      setDurationMin(String(parsed.durationMin));
+      setFieldErrors({});
       setPriority(parsed.priority);
       setSubjectId(parsed.subjectId ?? "");
       // If the parser invented a subject that doesn't exist yet, stage it for
@@ -74,7 +92,11 @@ export default function AddTaskPage() {
         setPendingSubjectName("");
       }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Parse failed");
+      if (err instanceof ApiError && err.upgradeRequired) {
+        setUpgradeMsg(err.message);
+      } else {
+        setError(err instanceof ApiError ? err.message : "Parse failed");
+      }
     } finally {
       setParsing(false);
     }
@@ -103,11 +125,14 @@ export default function AddTaskPage() {
   async function onSave(e: FormEvent) {
     e.preventDefault();
     if (!token) return;
+    const found = validateTaskForm({ title, deadline, durationMin });
+    setFieldErrors(found);
+    if (hasErrors(found)) return;
     setSaving(true);
     setError(null);
     try {
       await tasksApi.create(token, {
-        title,
+        title: title.trim(),
         deadline: new Date(deadline).toISOString(),
         durationMin: Number(durationMin),
         priority,
@@ -115,7 +140,9 @@ export default function AddTaskPage() {
       });
       router.push("/tasks");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to save task");
+      const fromServer = serverFieldErrors(err, TASK_FIELDS);
+      setFieldErrors(fromServer);
+      if (!hasErrors(fromServer)) setError(err instanceof ApiError ? err.message : "Failed to save task");
     } finally {
       setSaving(false);
     }
@@ -158,6 +185,8 @@ export default function AddTaskPage() {
         </div>
       </div>
 
+      {upgradeMsg && <UpgradePrompt message={upgradeMsg} />}
+
       {/* New-subject confirmation */}
       {pendingSubjectName && (
         <div className="rounded-card border border-amber/40 bg-amber/5 p-4">
@@ -196,41 +225,53 @@ export default function AddTaskPage() {
       )}
 
       {/* Editable task form */}
-      <form onSubmit={onSave} className="flex flex-col gap-4 rounded-card border border-border bg-surface p-5">
+      <form onSubmit={onSave} noValidate className="flex flex-col gap-4 rounded-card border border-border bg-surface p-5">
         <h2 className="text-sm font-semibold">Task details</h2>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm sm:col-span-2">
             Title
             <input
-              required
               value={title}
+              maxLength={TITLE_MAX + 20}
               onChange={(e) => setTitle(e.target.value)}
-              className="rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-primary"
+              aria-invalid={!!fieldErrors.title}
+              className={inputClass(fieldErrors.title)}
             />
+            <FieldError message={fieldErrors.title} />
           </label>
 
           <label className="flex flex-col gap-1 text-sm">
             Deadline
             <input
               type="datetime-local"
-              required
               value={deadline}
               onChange={(e) => setDeadline(e.target.value)}
-              className="rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-primary"
+              aria-invalid={!!fieldErrors.deadline}
+              className={inputClass(fieldErrors.deadline)}
             />
+            <FieldError message={fieldErrors.deadline} />
           </label>
 
           <label className="flex flex-col gap-1 text-sm">
             Duration (minutes)
             <input
               type="number"
-              min={5}
-              required
+              inputMode="numeric"
+              min={NUMBER_LIMITS.durationMin.min}
+              max={NUMBER_LIMITS.durationMin.max}
               value={durationMin}
-              onChange={(e) => setDurationMin(Number(e.target.value))}
-              className="rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-primary"
+              onChange={(e) => setDurationMin(e.target.value)}
+              aria-invalid={!!fieldErrors.durationMin}
+              className={inputClass(fieldErrors.durationMin)}
             />
+            {fieldErrors.durationMin ? (
+              <FieldError message={fieldErrors.durationMin} />
+            ) : (
+              <span className="text-xs text-text-muted">
+                {NUMBER_LIMITS.durationMin.min}-{NUMBER_LIMITS.durationMin.max} minutes
+              </span>
+            )}
           </label>
 
           <label className="flex flex-col gap-1 text-sm">
@@ -268,7 +309,7 @@ export default function AddTaskPage() {
         <div>
           <button
             type="submit"
-            disabled={saving || !title || !deadline}
+            disabled={saving}
             className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
             {saving ? "Saving..." : "Save task"}

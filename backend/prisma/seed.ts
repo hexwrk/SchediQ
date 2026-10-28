@@ -1,7 +1,8 @@
 import "dotenv/config";
 import bcrypt from "bcryptjs";
-import { PrismaClient, Prisma } from "@prisma/client";
+import { AccountType, PrismaClient, Prisma, Role } from "@prisma/client";
 import { buildSchedule, SchedulerTask, SchedulerPrefs } from "../src/lib/scheduler";
+import { pickTemplate } from "../src/lib/courseTemplates";
 
 // Seed a populated, lived-in demo plus a small leaderboard cohort.
 // Everything here is DEMO data; the gamification math is identical for every
@@ -12,6 +13,10 @@ const prisma = new PrismaClient();
 
 const DEMO_EMAIL = "demo@schediq.app";
 const DEMO_PASSWORD = "demo1234";
+// Seeded operator account for the admin module. Demo credential only: change
+// it (or delete the account) on any deployment that is not a local demo.
+const ADMIN_EMAIL = "admin@schediq.app";
+const ADMIN_PASSWORD = "admin1234";
 
 // Fixed clock anchor so the seed is repeatable within a day.
 const now = new Date();
@@ -28,15 +33,65 @@ function inDays(n: number, h = 23, m = 59): Date {
 async function wipeUser(userId: string) {
   await prisma.studySession.deleteMany({ where: { task: { userId } } });
   await prisma.task.deleteMany({ where: { userId } });
+  await prisma.course.deleteMany({ where: { userId } }); // cascades to lessons
   await prisma.subject.deleteMany({ where: { userId } });
 }
 
-async function upsertUser(email: string, name: string, password: string) {
+// Build a course from the same offline templates the generator uses, then mark
+// the first lessons complete at past instants so XP, streak and mastery derive
+// from them exactly as they would from real use. score >= 70 = quiz passed.
+async function seedCourse(
+  userId: string,
+  topic: string,
+  level: string,
+  lessonCount: number,
+  subjectId: string | null,
+  completions: { daysAgo: number; hour: number; score: number }[]
+) {
+  const template = pickTemplate(topic, lessonCount);
+  const course = await prisma.course.create({
+    data: {
+      userId,
+      subjectId,
+      title: template.title,
+      topic,
+      level,
+      description: template.description,
+      source: "SEED",
+      lessons: {
+        create: template.lessons.map((l, i) => ({
+          order: i + 1,
+          title: l.title,
+          content: l.content,
+          keyPoints: l.keyPoints,
+          quiz: l.quiz as unknown as Prisma.InputJsonValue,
+        })),
+      },
+    },
+    include: { lessons: { orderBy: { order: "asc" } } },
+  });
+  for (const [i, c] of completions.entries()) {
+    const at = pastDay(c.daysAgo, c.hour);
+    await prisma.lesson.update({
+      where: { id: course.lessons[i].id },
+      data: { completedAt: at, quizScore: c.score, quizPassedAt: c.score >= 70 ? at : null },
+    });
+  }
+  return course;
+}
+
+async function upsertUser(
+  email: string,
+  name: string,
+  password: string,
+  role: Role = "USER",
+  accountType: AccountType = "FREE"
+) {
   const passwordHash = await bcrypt.hash(password, 12);
   return prisma.user.upsert({
     where: { email },
-    update: { passwordHash, name },
-    create: { email, passwordHash, name },
+    update: { passwordHash, name, role, accountType },
+    create: { email, passwordHash, name, role, accountType },
   });
 }
 
@@ -50,9 +105,17 @@ async function completedSession(taskId: string, start: Date, durationMin: number
 }
 
 async function main() {
+  // ---------- SUPER ADMIN ----------
+  // PREMIUM so the admin never trips the FREE tier gate while demoing.
+  await upsertUser(ADMIN_EMAIL, "System Admin", ADMIN_PASSWORD, "SUPER_ADMIN", "PREMIUM");
+
   // ---------- DEMO USER ----------
-  const demo = await upsertUser(DEMO_EMAIL, "Demo Student", DEMO_PASSWORD);
+  // PREMIUM so the full journey (generate a course for a weak subject) is never
+  // blocked by the 2-course FREE cap; free@schediq.app demonstrates the gate.
+  const demo = await upsertUser(DEMO_EMAIL, "Demo Student", DEMO_PASSWORD, "USER", "PREMIUM");
   await wipeUser(demo.id);
+  // Reset today's AI usage so the FREE cap demo always starts at 0/5.
+  await prisma.aiParseLog.deleteMany({ where: { userId: demo.id } });
 
   const subjectSpecs = [
     { name: "Networking", cognitiveCategory: "Analytical", colorTag: "#3454D1" },
@@ -155,6 +218,35 @@ async function main() {
     await completedSession(created[c.title], pastDay(c.daysAgo, c.hour), c.dur);
   }
 
+  // ---------- DEMO COURSES (the connected use case) ----------
+  // Databases: in progress, 2 of 5 lessons (~40%), one quiz passed, one failed.
+  // Networking: a finished 3-lesson course (Course Complete badge, milestone XP).
+  // Operating Systems: generated but untouched, and its tasks have no completed
+  // sessions, so its mastery starts at 0 and visibly jumps when a lesson + quiz
+  // is completed live during the demo.
+  await seedCourse(demo.id, "SQL and relational databases", "BEGINNER", 5, subjects["Databases"].id, [
+    { daysAgo: 2, hour: 17, score: 100 },
+    { daysAgo: 1, hour: 18, score: 67 },
+  ]);
+  await seedCourse(demo.id, "Networking subnetting and routing", "INTERMEDIATE", 3, subjects["Networking"].id, [
+    { daysAgo: 6, hour: 16, score: 100 },
+    { daysAgo: 5, hour: 16, score: 67 },
+    { daysAgo: 3, hour: 13, score: 100 },
+  ]);
+  await seedCourse(demo.id, "Operating systems processes and deadlock", "BEGINNER", 5, subjects["Operating Systems"].id, []);
+
+  // ---------- FREE-TIER ACCOUNT ----------
+  // Already at the 2-course FREE cap, so "Generate a course" shows the Upgrade
+  // prompt straight away; upgrading on /upgrade lifts it.
+  const free = await upsertUser("free@schediq.app", "Free Student", "free1234", "USER", "FREE");
+  await wipeUser(free.id);
+  await prisma.aiParseLog.deleteMany({ where: { userId: free.id } });
+  const freeSubject = await prisma.subject.create({
+    data: { name: "Programming", cognitiveCategory: "Technical", colorTag: "#6B52E0", userId: free.id },
+  });
+  await seedCourse(free.id, "Python programming", "BEGINNER", 4, freeSubject.id, [{ daysAgo: 1, hour: 10, score: 100 }]);
+  await seedCourse(free.id, "Cybersecurity basics", "BEGINNER", 3, null, []);
+
   // ---------- LEADERBOARD COHORT (demo classmates) ----------
   // Each classmate is a full account with their own subjects/tasks and a set of
   // completed past sessions, so their XP derives identically. Counts are tuned
@@ -217,6 +309,9 @@ async function main() {
     }
   }
 
+  console.log("Seeded free@schediq.app (password free1234, FREE, at the 2-course cap).");
+  console.log("Seeded 3 demo courses (Databases 2/5, Networking 3/3, Operating Systems 0/5).");
+  console.log(`Seeded super admin ${ADMIN_EMAIL} (password ${ADMIN_PASSWORD}, SUPER_ADMIN, PREMIUM).`);
   console.log(
     `Seeded ${DEMO_EMAIL} (password ${DEMO_PASSWORD}): ${subjectSpecs.length} subjects, ` +
       `${taskSpecs.length} tasks, ${planned.length} planned sessions, ` +

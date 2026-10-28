@@ -3,11 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
+  Overview,
   Preference,
   StudySession,
   preferencesApi,
+  progressApi,
   sessionsApi,
 } from "@/lib/api";
+import ProgressHome from "./ProgressHome";
 import { useAuth } from "@/lib/auth-context";
 import { useProgress } from "@/lib/progress-context";
 import { RefreshIcon } from "@/lib/icons";
@@ -36,6 +39,9 @@ export default function DashboardPage() {
   const { progress, refresh: refreshProgress, celebrate } = useProgress();
   const [sessions, setSessions] = useState<StudySession[]>([]);
   const [prefs, setPrefs] = useState<Preference | null>(null);
+  // Progress home data (weekly summary, mastery, courses, trend). Reloaded with
+  // the sessions after every completion so the bars move immediately.
+  const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [regenerating, setRegenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,12 +51,14 @@ export default function DashboardPage() {
   const load = useCallback(async () => {
     if (!token) return;
     try {
-      const [sRes, pRes] = await Promise.all([
+      const [sRes, pRes, oRes] = await Promise.all([
         sessionsApi.list(token),
         preferencesApi.get(token),
+        progressApi.overview(token),
       ]);
       setSessions(sRes.sessions);
       setPrefs(pRes.preferences);
+      setOverview(oRes);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to load dashboard");
     } finally {
@@ -97,7 +105,7 @@ export default function DashboardPage() {
           setTimeout(() => setXpFloat((f) => (f && f.id === id ? null : f)), 1500);
         }
         if (after.level > before.level) {
-          celebrate(`Level ${after.level}!`, "You leveled up. Keep the streak going.");
+          celebrate(`Level ${after.level}: ${after.levelTitle}!`, "You leveled up. Keep the streak going.");
         }
         const newBadges = after.badges.filter(
           (b) => b.unlocked && !before.badges.find((x) => x.key === b.key)?.unlocked
@@ -161,8 +169,13 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-text-muted">Your study week at a glance.</p>
+      {overview && <ProgressHome overview={overview} />}
+
+      <div className="flex items-center justify-between border-t border-border pt-6">
+        <div>
+          <h2 className="text-sm font-semibold">This week&rsquo;s schedule</h2>
+          <p className="text-sm text-text-muted">Click a block to mark it complete and earn XP.</p>
+        </div>
         <button
           onClick={regenerate}
           disabled={regenerating}

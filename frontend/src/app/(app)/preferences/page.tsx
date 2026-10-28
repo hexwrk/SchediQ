@@ -1,12 +1,54 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import {
+  NUMBER_LIMITS,
+  validateHHMM,
+  validateIntInRange,
+  validateTimeWindow,
+} from "@shared/validation";
 import { ApiError, Preference, preferencesApi, sessionsApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { FieldError, FieldErrors, collectErrors, hasErrors, inputClass, serverFieldErrors } from "@/lib/form";
+
+type Field = "maxDailyMins" | "breakMins" | "preferredStart" | "preferredEnd";
+const FIELDS: Field[] = ["maxDailyMins", "breakMins", "preferredStart", "preferredEnd"];
+
+// Numeric inputs are held as the RAW string the user typed, so an empty box or
+// "-5" is validated with a clear message instead of silently becoming 0.
+interface FormState {
+  maxDailyMins: string;
+  breakMins: string;
+  preferredStart: string;
+  preferredEnd: string;
+  clustering: boolean;
+}
+
+function toForm(p: Preference): FormState {
+  return {
+    maxDailyMins: String(p.maxDailyMins),
+    breakMins: String(p.breakMins),
+    preferredStart: p.preferredStart,
+    preferredEnd: p.preferredEnd,
+    clustering: p.clustering,
+  };
+}
+
+function validate(f: FormState): FieldErrors<Field> {
+  return collectErrors<Field>({
+    maxDailyMins: validateIntInRange(f.maxDailyMins, "maxDailyMins"),
+    breakMins: validateIntInRange(f.breakMins, "breakMins"),
+    preferredStart: validateHHMM(f.preferredStart, "Preferred start"),
+    // Window check reported on the end field, matching the server's zod path.
+    preferredEnd:
+      validateHHMM(f.preferredEnd, "Preferred end") ?? validateTimeWindow(f.preferredStart, f.preferredEnd),
+  });
+}
 
 export default function PreferencesPage() {
   const { token } = useAuth();
-  const [prefs, setPrefs] = useState<Preference | null>(null);
+  const [form, setForm] = useState<FormState | null>(null);
+  const [errors, setErrors] = useState<FieldErrors<Field>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,40 +60,44 @@ export default function PreferencesPage() {
     if (!token) return;
     preferencesApi
       .get(token)
-      .then((r) => setPrefs(r.preferences))
+      .then((r) => setForm(toForm(r.preferences)))
       .catch((err) => setError(err instanceof ApiError ? err.message : "Failed to load"))
       .finally(() => setLoading(false));
   }, [token]);
 
-  function set<K extends keyof Preference>(key: K, value: Preference[K]) {
-    setPrefs((p) => (p ? { ...p, [key]: value } : p));
+  function set<K extends keyof FormState>(key: K, value: FormState[K]) {
+    if (!form) return;
+    const next = { ...form, [key]: value };
+    setForm(next);
+    // Once an error is showing, re-validate live so it clears as soon as fixed.
+    if (hasErrors(errors)) setErrors(validate(next));
   }
 
   async function onSave(e: FormEvent) {
     e.preventDefault();
-    if (!token || !prefs) return;
-    // Guard: preferred end must be after preferred start, else the scheduler
-    // has a zero-width window and produces nothing.
-    if (prefs.preferredEnd <= prefs.preferredStart) {
-      setError("Preferred end must be later than preferred start.");
-      return;
-    }
+    if (!token || !form) return;
+    const found = validate(form);
+    setErrors(found);
+    if (hasErrors(found)) return;
+
     setSaving(true);
     setError(null);
     setSavedMsg(null);
     try {
       const { preferences } = await preferencesApi.update(token, {
-        maxDailyMins: prefs.maxDailyMins,
-        preferredStart: prefs.preferredStart,
-        preferredEnd: prefs.preferredEnd,
-        breakMins: prefs.breakMins,
-        clustering: prefs.clustering,
+        maxDailyMins: Number(form.maxDailyMins),
+        preferredStart: form.preferredStart,
+        preferredEnd: form.preferredEnd,
+        breakMins: Number(form.breakMins),
+        clustering: form.clustering,
       });
-      setPrefs(preferences);
+      setForm(toForm(preferences));
       setSavedMsg("Preferences saved.");
       setOfferRegen(true);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to save");
+      const fromServer = serverFieldErrors(err, FIELDS);
+      setErrors(fromServer);
+      if (!hasErrors(fromServer)) setError(err instanceof ApiError ? err.message : "Failed to save");
     } finally {
       setSaving(false);
     }
@@ -68,62 +114,97 @@ export default function PreferencesPage() {
     }
   }
 
-  if (loading || !prefs) {
-    return <p className="text-sm text-text-muted">Loading preferences...</p>;
+  if (loading || !form) {
+    return error ? (
+      <p className="text-sm text-red-600">{error}</p>
+    ) : (
+      <p className="text-sm text-text-muted">Loading preferences...</p>
+    );
   }
 
+  const daily = NUMBER_LIMITS.maxDailyMins;
+  const brk = NUMBER_LIMITS.breakMins;
+
   return (
-    <form onSubmit={onSave} className="flex max-w-xl flex-col gap-5 rounded-card border border-border bg-surface p-6">
+    <form
+      onSubmit={onSave}
+      noValidate
+      className="flex max-w-xl flex-col gap-5 rounded-card border border-border bg-surface p-6"
+    >
       <div className="grid gap-5 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
           Max study minutes per day
           <input
             type="number"
-            min={30}
+            inputMode="numeric"
+            min={daily.min}
+            max={daily.max}
             step={15}
-            value={prefs.maxDailyMins}
-            onChange={(e) => set("maxDailyMins", Number(e.target.value))}
-            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+            value={form.maxDailyMins}
+            onChange={(e) => set("maxDailyMins", e.target.value)}
+            aria-invalid={!!errors.maxDailyMins}
+            className={inputClass(errors.maxDailyMins)}
           />
+          {errors.maxDailyMins ? (
+            <FieldError message={errors.maxDailyMins} />
+          ) : (
+            <span className="text-xs text-text-muted">
+              {daily.min}-{daily.max} minutes
+            </span>
+          )}
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
           Break between blocks (minutes)
           <input
             type="number"
-            min={0}
+            inputMode="numeric"
+            min={brk.min}
+            max={brk.max}
             step={5}
-            value={prefs.breakMins}
-            onChange={(e) => set("breakMins", Number(e.target.value))}
-            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+            value={form.breakMins}
+            onChange={(e) => set("breakMins", e.target.value)}
+            aria-invalid={!!errors.breakMins}
+            className={inputClass(errors.breakMins)}
           />
+          {errors.breakMins ? (
+            <FieldError message={errors.breakMins} />
+          ) : (
+            <span className="text-xs text-text-muted">
+              {brk.min}-{brk.max} minutes
+            </span>
+          )}
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
           Preferred start
           <input
             type="time"
-            value={prefs.preferredStart}
+            value={form.preferredStart}
             onChange={(e) => set("preferredStart", e.target.value)}
-            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+            aria-invalid={!!errors.preferredStart}
+            className={inputClass(errors.preferredStart)}
           />
+          <FieldError message={errors.preferredStart} />
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
           Preferred end
           <input
             type="time"
-            value={prefs.preferredEnd}
+            value={form.preferredEnd}
             onChange={(e) => set("preferredEnd", e.target.value)}
-            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+            aria-invalid={!!errors.preferredEnd}
+            className={inputClass(errors.preferredEnd)}
           />
+          <FieldError message={errors.preferredEnd} />
         </label>
       </div>
 
       <label className="flex items-center gap-3 text-sm">
         <input
           type="checkbox"
-          checked={prefs.clustering}
+          checked={form.clustering}
           onChange={(e) => set("clustering", e.target.checked)}
           className="h-4 w-4 accent-[var(--primary)]"
         />

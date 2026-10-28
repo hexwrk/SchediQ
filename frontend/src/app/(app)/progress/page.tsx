@@ -21,7 +21,9 @@ export default function ProgressPage() {
         <div className="flex items-center gap-5 rounded-card border border-border bg-surface p-5">
           <LevelRing pct={pct} level={progress.level} />
           <div>
-            <p className="text-sm font-semibold">Level {progress.level}</p>
+            <p className="text-sm font-semibold">
+              Level {progress.level} <span className="font-normal text-text-muted">· {progress.levelTitle}</span>
+            </p>
             <p className="text-2xl font-semibold tracking-tight">{progress.xp} XP</p>
             <p className="text-xs text-text-muted">
               {levelProgress.toNext} XP to level {progress.level + 1}
@@ -54,6 +56,63 @@ export default function ProgressPage() {
             </p>
             <p className="text-xs text-text-muted">Ranked by XP across the cohort</p>
           </div>
+        </div>
+      </div>
+
+      {/* How to earn XP: every source, its value, and what you have earned from it */}
+      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+        <div className="rounded-card border border-border bg-surface p-5">
+          <h2 className="mb-1 text-sm font-semibold">How to earn XP</h2>
+          <p className="mb-4 text-xs text-text-muted">
+            XP is recalculated from your saved study sessions, lessons and quizzes every time, so it
+            never drifts and always survives a reload.
+          </p>
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs uppercase tracking-wide text-text-muted">
+              <tr>
+                <th className="pb-2 font-medium">Source</th>
+                <th className="pb-2 font-medium">Worth</th>
+                <th className="pb-2 text-right font-medium">You earned</th>
+              </tr>
+            </thead>
+            <tbody>
+              {progress.xpRules.sources.map((r) => (
+                <tr key={r.source} className="border-t border-border align-top">
+                  <td className="py-2 pr-3">
+                    <span className="font-medium">{r.label}</span>
+                    <span className="block text-xs text-text-muted">{r.howTo}</span>
+                  </td>
+                  <td className="whitespace-nowrap py-2 pr-3 text-primary">{r.amount}</td>
+                  <td className="py-2 text-right font-semibold">{progress.breakdown[r.source]} XP</td>
+                </tr>
+              ))}
+              <tr className="border-t border-border">
+                <td className="pt-2 font-semibold" colSpan={2}>
+                  Total
+                </td>
+                <td className="pt-2 text-right font-semibold">{progress.xp} XP</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div className="rounded-card border border-border bg-surface p-5">
+          <h2 className="mb-4 text-sm font-semibold">Recent XP</h2>
+          {progress.recentEvents.length === 0 ? (
+            <p className="text-sm text-text-muted">Complete a study block or a lesson to earn your first XP.</p>
+          ) : (
+            <ul className="flex flex-col gap-2 text-sm">
+              {progress.recentEvents.map((e, i) => (
+                <li key={`${e.at}-${i}`} className="flex items-center justify-between gap-3">
+                  <span className="min-w-0">
+                    <span className="block truncate">{e.label}</span>
+                    <span className="text-xs text-text-muted">{new Date(e.at).toLocaleString()}</span>
+                  </span>
+                  <span className="shrink-0 font-semibold text-accent">+{e.amount}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
 
@@ -95,8 +154,8 @@ export default function ProgressPage() {
           </span>
         </div>
         <p className="mb-4 text-xs text-text-muted">
-          Seeded classmate accounts. XP is derived from completed sessions with
-          the exact same rules for everyone, including you.
+          Seeded classmate accounts. XP is derived from completed sessions,
+          lessons and quizzes with the exact same rules for everyone, including you.
         </p>
         <ol className="flex flex-col gap-1.5">
           {leaderboard.map((e) => (

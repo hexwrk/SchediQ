@@ -1,14 +1,17 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { deadlineField, intField, titleField } from "../lib/validators";
 
+// Field rules (title length, deadline sanity, 5-600 minute duration) are the
+// shared ones the task forms enforce client-side.
 const taskSchema = z.object({
-  title: z.string().min(1),
-  deadline: z.coerce.date(),
-  durationMin: z.number().int().positive(),
-  priority: z.enum(["LOW", "MEDIUM", "HIGH"]).optional(),
+  title: titleField,
+  deadline: deadlineField,
+  durationMin: intField("durationMin"),
+  priority: z.enum(["LOW", "MEDIUM", "HIGH"], { message: "Priority must be LOW, MEDIUM or HIGH." }).optional(),
   status: z.enum(["PENDING", "SCHEDULED", "DONE"]).optional(),
-  subjectId: z.string().uuid().nullable().optional(),
+  subjectId: z.string().uuid("Unknown subject.").nullable().optional(),
 });
 
 export async function listTasks(req: Request, res: Response) {

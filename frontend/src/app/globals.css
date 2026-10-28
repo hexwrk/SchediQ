@@ -42,3 +42,13 @@ body {
   font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Print: reports render as plain documents on white paper. */
+@media print {
+  body {
+    background: #ffffff;
+  }
+  @page {
+    margin: 16mm;
+  }
+}

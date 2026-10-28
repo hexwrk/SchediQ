@@ -9,6 +9,8 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { PlusIcon } from "@/lib/icons";
+import { SUBJECT_NAME_MAX, validateRequiredText } from "@shared/validation";
+import { FieldError, inputClass, serverFieldErrors } from "@/lib/form";
 
 const CATEGORIES: CognitiveCategory[] = ["Analytical", "Verbal", "Technical", "General"];
 const SWATCHES = ["#3454D1", "#0E9E7E", "#D98324", "#6B52E0", "#DC2626", "#0891B2"];
@@ -26,6 +28,7 @@ export default function SubjectsPage() {
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
+  const [nameError, setNameError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -39,12 +42,25 @@ export default function SubjectsPage() {
   function reset() {
     setForm(emptyForm);
     setEditingId(null);
+    setNameError(null);
   }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!token) return;
     setError(null);
+    // Same rule as the server (shared/validation.ts); also catches the common
+    // case-insensitive duplicate before a round trip.
+    const trimmed = form.name.trim();
+    let nameErr = validateRequiredText(trimmed, "Subject name", SUBJECT_NAME_MAX);
+    if (
+      !nameErr &&
+      subjects.some((s) => s.id !== editingId && s.name.toLowerCase() === trimmed.toLowerCase())
+    ) {
+      nameErr = "You already have a subject with that name.";
+    }
+    setNameError(nameErr);
+    if (nameErr) return;
     try {
       if (editingId) {
         const { subject } = await subjectsApi.update(token, editingId, form);
@@ -55,8 +71,11 @@ export default function SubjectsPage() {
       }
       reset();
     } catch (err) {
+      const fields = serverFieldErrors(err, ["name", "cognitiveCategory", "colorTag"] as const);
       if (err instanceof ApiError && err.status === 409) {
-        setError("You already have a subject with that name.");
+        setNameError("You already have a subject with that name.");
+      } else if (fields.name) {
+        setNameError(fields.name);
       } else {
         setError(err instanceof ApiError ? err.message : "Failed to save subject");
       }
@@ -120,6 +139,7 @@ export default function SubjectsPage() {
       {/* Create / edit form */}
       <form
         onSubmit={onSubmit}
+        noValidate
         className="flex h-fit flex-col gap-4 rounded-card border border-border bg-surface p-5"
       >
         <h2 className="text-sm font-semibold">{editingId ? "Edit subject" : "New subject"}</h2>
@@ -127,11 +147,16 @@ export default function SubjectsPage() {
         <label className="flex flex-col gap-1 text-sm">
           Name
           <input
-            required
             value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+            maxLength={SUBJECT_NAME_MAX + 20}
+            onChange={(e) => {
+              setForm((f) => ({ ...f, name: e.target.value }));
+              if (nameError) setNameError(validateRequiredText(e.target.value, "Subject name", SUBJECT_NAME_MAX));
+            }}
+            aria-invalid={!!nameError}
+            className={inputClass(nameError)}
           />
+          <FieldError message={nameError} />
         </label>
 
         <label className="flex flex-col gap-1 text-sm">

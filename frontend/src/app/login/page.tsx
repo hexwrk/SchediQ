@@ -5,6 +5,20 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { FieldError, FieldErrors, hasErrors, inputClass } from "@/lib/form";
+
+type Field = "email" | "password";
+
+// Login checks presence/shape only. The full "real address" rule is for
+// sign-up; applying it here would just tell an attacker which addresses the
+// app considers valid, while the server answers every bad login identically.
+function validateLogin(email: string, password: string): FieldErrors<Field> {
+  const out: FieldErrors<Field> = {};
+  if (!email.trim()) out.email = "Email is required.";
+  else if (!email.includes("@")) out.email = "Enter your email address, e.g. name@gmail.com.";
+  if (!password) out.password = "Password is required.";
+  return out;
+}
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -12,11 +26,15 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<FieldErrors<Field>>({});
   const [submitting, setSubmitting] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    const found = validateLogin(email, password);
+    setErrors(found);
+    if (hasErrors(found)) return;
     setSubmitting(true);
     try {
       await login(email, password);
@@ -32,6 +50,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-bg px-6">
       <form
         onSubmit={onSubmit}
+        noValidate
         className="flex w-full max-w-sm flex-col gap-4 rounded-card border border-border bg-surface p-7"
       >
         <div className="flex items-center gap-2">
@@ -45,22 +64,26 @@ export default function LoginPage() {
           Email
           <input
             type="email"
-            required
+            autoComplete="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+            aria-invalid={!!errors.email}
+            className={inputClass(errors.email)}
           />
+          <FieldError message={errors.email} />
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
           Password
           <input
             type="password"
-            required
+            autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+            aria-invalid={!!errors.password}
+            className={inputClass(errors.password)}
           />
+          <FieldError message={errors.password} />
         </label>
 
         {error && <p className="text-sm text-red-600">{error}</p>}

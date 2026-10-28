@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { usePathname } from "next/navigation";
 import { Progress, progressApi } from "./api";
 import { useAuth } from "./auth-context";
 
@@ -49,9 +50,13 @@ export function ProgressProvider({ children }: { children: React.ReactNode }) {
     }
   }, [token]);
 
+  // Refetch on login AND on every navigation. Progress is derived server-side
+  // from the database, so this keeps the HUD exactly in step with what is
+  // stored after an action on any page, and a hard reload simply refetches.
+  const pathname = usePathname();
   useEffect(() => {
     if (token) refresh();
-  }, [token, refresh]);
+  }, [token, refresh, pathname]);
 
   const celebrate = useCallback((title: string, subtitle: string) => {
     const id = ++idRef.current;

@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { aiUsageFor } from "../lib/tier";
 
 // AI task parser. The AI is used STRICTLY for parsing free text into structured
 // fields; it never schedules. Two paths:
@@ -22,7 +23,7 @@ const COGNITIVE_CATEGORIES = ["Analytical", "Verbal", "Technical", "General"] as
 type CognitiveCategory = (typeof COGNITIVE_CATEGORIES)[number];
 
 const bodySchema = z.object({
-  text: z.string().min(1),
+  text: z.string().trim().min(1, "Describe the task first."),
 });
 
 export interface ParsedTask {
@@ -283,9 +284,29 @@ export async function parseTask(req: Request, res: Response) {
   const { text } = bodySchema.parse(req.body);
   const clipped = text.slice(0, MAX_INPUT);
   const now = new Date();
+  const userId = req.userId as string;
+
+  // Tier gate: FREE accounts get a fixed number of parses per day. 402 with a
+  // machine-readable code lets the client show an "Upgrade to Premium" prompt
+  // instead of a raw error. Count-then-insert is not atomic, so two parallel
+  // requests at the boundary could both pass; acceptable for a demo cap, a real
+  // billing limit would use a row lock or a counter with a CHECK constraint.
+  const account = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { accountType: true },
+  });
+  const usage = await aiUsageFor(userId, account?.accountType ?? "FREE", now);
+  if (usage.limit !== null && usage.used >= usage.limit) {
+    return res.status(402).json({
+      error: `Free plan limit reached: ${usage.limit} AI parses per day. Upgrade to Premium for unlimited parsing.`,
+      code: "UPGRADE_REQUIRED",
+      usage,
+    });
+  }
+  await prisma.aiParseLog.create({ data: { userId } });
 
   const subjects = await prisma.subject.findMany({
-    where: { userId: req.userId },
+    where: { userId },
     select: { id: true, name: true, cognitiveCategory: true },
   });
 

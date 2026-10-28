@@ -13,6 +13,17 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { PlusIcon } from "@/lib/icons";
+import { NUMBER_LIMITS } from "@shared/validation";
+import {
+  FieldError,
+  FieldErrors,
+  TASK_FIELDS,
+  TaskField,
+  hasErrors,
+  inputClass,
+  serverFieldErrors,
+  validateTaskForm,
+} from "@/lib/form";
 
 const PRIORITY_COLOR: Record<TaskPriority, string> = {
   HIGH: "var(--amber)",
@@ -32,10 +43,12 @@ export default function TasksPage() {
   const [form, setForm] = useState({
     title: "",
     deadline: "",
-    durationMin: 60,
+    // Raw input string so blanks/negatives get a message instead of NaN.
+    durationMin: "60",
     priority: "MEDIUM" as TaskPriority,
     subjectId: "",
   });
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors<TaskField>>({});
 
   useEffect(() => {
     if (!token) return;
@@ -50,10 +63,11 @@ export default function TasksPage() {
 
   function startEdit(task: Task) {
     setEditingId(task.id);
+    setFieldErrors({});
     setForm({
       title: task.title,
       deadline: task.deadline.slice(0, 16),
-      durationMin: task.durationMin,
+      durationMin: String(task.durationMin),
       priority: task.priority,
       subjectId: task.subjectId ?? "",
     });
@@ -62,9 +76,12 @@ export default function TasksPage() {
   async function saveEdit(e: FormEvent) {
     e.preventDefault();
     if (!token || !editingId) return;
+    const found = validateTaskForm(form);
+    setFieldErrors(found);
+    if (hasErrors(found)) return;
     try {
       const { task } = await tasksApi.update(token, editingId, {
-        title: form.title,
+        title: form.title.trim(),
         deadline: new Date(form.deadline).toISOString(),
         durationMin: Number(form.durationMin),
         priority: form.priority,
@@ -73,7 +90,9 @@ export default function TasksPage() {
       setTasks((prev) => prev.map((t) => (t.id === task.id ? task : t)));
       setEditingId(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to save");
+      const fromServer = serverFieldErrors(err, TASK_FIELDS);
+      setFieldErrors(fromServer);
+      if (!hasErrors(fromServer)) setError(err instanceof ApiError ? err.message : "Failed to save");
     }
   }
 
@@ -124,40 +143,44 @@ export default function TasksPage() {
               <form
                 key={task.id}
                 onSubmit={saveEdit}
+                noValidate
                 className="flex flex-col gap-3 rounded-card border border-primary/40 bg-surface p-4"
               >
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="flex flex-col gap-1 text-sm sm:col-span-2">
                     Title
                     <input
-                      required
                       value={form.title}
                       onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-                      className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+                      aria-invalid={!!fieldErrors.title}
+                      className={inputClass(fieldErrors.title)}
                     />
+                    <FieldError message={fieldErrors.title} />
                   </label>
                   <label className="flex flex-col gap-1 text-sm">
                     Deadline
                     <input
                       type="datetime-local"
-                      required
                       value={form.deadline}
                       onChange={(e) => setForm((f) => ({ ...f, deadline: e.target.value }))}
-                      className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+                      aria-invalid={!!fieldErrors.deadline}
+                      className={inputClass(fieldErrors.deadline)}
                     />
+                    <FieldError message={fieldErrors.deadline} />
                   </label>
                   <label className="flex flex-col gap-1 text-sm">
                     Duration (min)
                     <input
                       type="number"
-                      min={5}
-                      required
+                      inputMode="numeric"
+                      min={NUMBER_LIMITS.durationMin.min}
+                      max={NUMBER_LIMITS.durationMin.max}
                       value={form.durationMin}
-                      onChange={(e) =>
-                        setForm((f) => ({ ...f, durationMin: Number(e.target.value) }))
-                      }
-                      className="rounded-lg border border-border px-3 py-2 outline-none focus:border-primary"
+                      onChange={(e) => setForm((f) => ({ ...f, durationMin: e.target.value }))}
+                      aria-invalid={!!fieldErrors.durationMin}
+                      className={inputClass(fieldErrors.durationMin)}
                     />
+                    <FieldError message={fieldErrors.durationMin} />
                   </label>
                   <label className="flex flex-col gap-1 text-sm">
                     Priority
