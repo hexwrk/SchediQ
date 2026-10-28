@@ -191,6 +191,8 @@ Deploy and note the URL, e.g. `https://schediq.vercel.app`.
       - Logging in with it shows the "temporary password" banner.
       - Changing it on Account clears the banner.
       - The temporary password then stops working.
+      - A second browser that was logged in as that user gets sent to the
+        login page with a "session has ended" notice on its next action.
 - [ ] Admin > System & backup shows "Production backups are managed by Neon",
       with the buttons disabled and no error.
 - [ ] Rate limits return 429 (run from your machine):
@@ -229,9 +231,10 @@ Deploy and note the URL, e.g. `https://schediq.vercel.app`.
 - **Rate limit store:** in memory, which is correct for one Render instance.
   Scaling to several instances needs a shared store (Redis) so the counters are
   global.
-- **JWT revocation:** an admin password reset does not invalidate tokens the
-  user already holds (they expire after `JWT_EXPIRES_IN`). Fix with a
-  `tokenVersion` on User checked in `requireAuth`.
+- **Session revocation:** handled by `User.tokenVersion`. A password change,
+  a used reset link or an admin temporary password signs the user out on every
+  device. It costs one primary-key lookup per authenticated request, which is
+  negligible on Neon's pooled connection.
 - **Database role:** connect as a non-superuser role. Neon's default role is
   not a Postgres superuser.
 - **Logs:** one access log line per request (no bodies or headers). Errors are

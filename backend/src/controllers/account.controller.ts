@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { Request, Response } from "express";
 import { z } from "zod";
+import { tokenFor } from "../lib/jwt";
 import { prisma } from "../lib/prisma";
 import { aiUsageFor } from "../lib/tier";
 import { passwordField } from "../lib/validators";
@@ -44,7 +45,9 @@ const passwordSchema = z.object({
 // POST /api/account/password  { currentPassword, newPassword }
 // Self-service password change (also how an admin-issued temporary password
 // is replaced). Re-checks the current password so a stolen token alone cannot
-// take over the account, then burns any outstanding reset links.
+// take over the account, then burns any outstanding reset links and revokes
+// every existing token (tokenVersion++). The caller gets a fresh token so this
+// device stays signed in; every other device must log in again.
 export async function changePassword(req: Request, res: Response) {
   const { currentPassword, newPassword } = passwordSchema.parse(req.body);
   const user = await prisma.user.findUnique({ where: { id: req.userId } });
@@ -65,13 +68,20 @@ export async function changePassword(req: Request, res: Response) {
 
   const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
   const [updated] = await prisma.$transaction([
-    prisma.user.update({ where: { id: user.id }, data: { passwordHash, mustChangePassword: false } }),
+    prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash, mustChangePassword: false, tokenVersion: { increment: 1 } },
+    }),
     prisma.passwordResetToken.updateMany({
       where: { userId: user.id, usedAt: null },
       data: { usedAt: new Date() },
     }),
   ]);
-  return res.json({ user: toPublicUser(updated), message: "Password changed." });
+  return res.json({
+    token: tokenFor(updated),
+    user: toPublicUser(updated),
+    message: "Password changed. Other devices have been signed out.",
+  });
 }
 
 const deleteSchema = z.object({

@@ -54,12 +54,14 @@ shown in code.
 - **Admin recovery without email:** `POST /api/admin/users/:id/reset-password`
   (super admin only, not for the admin's own account) sets a random temporary
   password (16 chars from a 31-symbol alphabet via `crypto.randomInt`, ~79
-  bits), burns outstanding reset links, sets `mustChangePassword`, and returns
+  bits), burns outstanding reset links, signs the user out everywhere
+  (`tokenVersion`), sets `mustChangePassword`, and returns
   the password once with `Cache-Control: no-store`. It is never logged; the log
   records only who reset whom. The user sees a banner until they change it.
 - **Change password:** `POST /api/account/password` re-checks the current
-  password, refuses reusing it, clears `mustChangePassword` and burns
-  outstanding reset links.
+  password, refuses reusing it, clears `mustChangePassword`, burns outstanding
+  reset links and revokes all other sessions, returning a fresh token for the
+  current one.
 - `DELETE /api/account` requires the **current password** (a stolen token alone
   cannot destroy an account) plus `confirm: "DELETE"`. It cascades to all owned
   rows. The last remaining SUPER_ADMIN cannot delete themselves.
@@ -74,6 +76,18 @@ shown in code.
 - Every data route uses `requireAuth`
   (`backend/src/middleware/auth.middleware.ts`), which verifies the signature and
   expiry and sets `req.userId`. Missing or invalid tokens get `401`.
+- **Revocation (`User.tokenVersion`).** Each token carries the user's
+  `tokenVersion` as the `tv` claim, and `requireAuth` looks the user up on
+  every request (one primary-key read) and rejects the token if the account is
+  gone or the version no longer matches. The version is incremented when the
+  password changes (Account page), when a reset link is used, and when an admin
+  issues a temporary password, so every older token on every device stops
+  working on its next request. The device that changed its own password gets a
+  fresh token and stays signed in. Tokens issued before this existed have no
+  `tv` and are read as version 0 (the column default), so deploying it logs
+  nobody out. The frontend treats any 401 on an authenticated request as
+  "session ended": it clears the stored token and shows a notice on the login
+  page.
 - The token is sent as `Authorization: Bearer`, not as a cookie, so classic CSRF
   does not apply. Known trade-off: the frontend keeps it in `localStorage`, where
   an XSS bug could read it. React escapes output by default and no raw HTML is
@@ -185,11 +199,9 @@ pass. A real billing limit would use a row lock.
 
 - Rate limit counters are in memory (per process). Correct for one instance;
   multiple instances need a shared store such as Redis.
-- No refresh tokens or server-side token revocation. Logout clears the client
-  token only. A role change is enforced immediately for admin routes because the
-  role is read from the DB, and a deleted account's token stops working (the user
-  no longer exists). A **password reset does not yet invalidate JWTs already
-  issued**; the fix is a `tokenVersion` (or `passwordChangedAt`) on User, checked
-  by `requireAuth`.
+- No refresh tokens, and logout only clears the token in that browser (it is
+  not revoked server-side, so a copied token stays valid until it expires or
+  the password changes). A "sign out everywhere" button would just increment
+  `tokenVersion`.
 - Password reset links are logged server-side in production until a mailer
   (e.g. Resend) is added.

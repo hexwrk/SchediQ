@@ -27,6 +27,10 @@ model User {
   // Set when an admin issues a temporary password; the app asks the user to
   // choose a new one, and changing it clears the flag.
   mustChangePassword Boolean @default(false)
+  // Embedded in every JWT as "tv". Incrementing it revokes every token issued
+  // before (password change, reset link used, admin temporary password), since
+  // requireAuth rejects a token whose tv no longer matches.
+  tokenVersion Int @default(0)
 
   subjects     Subject[]
   tasks        Task[]

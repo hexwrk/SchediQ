@@ -40,6 +40,7 @@ step number.
 | 31 | Production lockdown | Run the API with `DEMO_MODE=false`; Forgot password; open System & backup | Only the generic message, no link on screen; "Production backups are managed by Neon", buttons disabled |
 | 32 | Rate limits | Wrong password 11 times in a row; 21 AI parses within an hour (Premium account) | 11th login gets "Too many login attempts" (429); 21st parse gets "AI request limit reached" (429) |
 | 33 | Fail-fast config | Start the API with `JWT_SECRET` removed from `.env` | Exits immediately listing "JWT_SECRET is required and must be at least 32 characters" |
+| 34 | Sign out everywhere | Log in as a student in two browsers; in browser 1 change the password on Account; in browser 2 click any page | Browser 1 stays signed in; browser 2 lands on Log in with "Your session has ended..." |
 
 Automated checks before a demo:
 

@@ -111,9 +111,10 @@ export default function AccountPage() {
 type PwField = "currentPassword" | "newPassword" | "confirmPassword";
 
 // Change password. Also the step that replaces an admin-issued temporary
-// password: the server clears mustChangePassword, and setUser hides the banner.
+// password: the server clears mustChangePassword and revokes every older token,
+// so the fresh token it returns is stored to keep this device signed in.
 function ChangePasswordForm() {
-  const { token, user, setUser } = useAuth();
+  const { token, user, setSession } = useAuth();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -138,7 +139,7 @@ function ChangePasswordForm() {
     setSaving(true);
     try {
       const res = await accountApi.changePassword(token, currentPassword, newPassword);
-      setUser(res.user);
+      setSession(res.token, res.user);
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");

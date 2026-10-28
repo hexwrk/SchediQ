@@ -21,7 +21,7 @@ function validateLogin(email: string, password: string): FieldErrors<Field> {
 }
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, notice } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -59,6 +59,12 @@ export default function LoginPage() {
           </span>
           <h1 className="text-xl font-semibold tracking-tight">Log in</h1>
         </div>
+
+        {notice && (
+          <p role="status" className="rounded-lg border border-amber/40 bg-amber/5 px-3 py-2 text-sm">
+            {notice}
+          </p>
+        )}
 
         <label className="flex flex-col gap-1 text-sm">
           Email

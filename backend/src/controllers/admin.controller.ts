@@ -107,7 +107,8 @@ export async function deleteUser(req: Request, res: Response) {
 //
 // The account-recovery path that works without email: the admin issues a
 // temporary password, sees it ONCE, and passes it to the user out of band. The
-// user is then asked to choose their own (mustChangePassword).
+// user is then asked to choose their own (mustChangePassword). All of the
+// user's existing sessions are revoked (tokenVersion).
 
 // No look-alike characters (0/O, 1/l/I) so it can be read out or retyped.
 const TEMP_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
@@ -144,7 +145,12 @@ export async function resetUserPassword(req: Request, res: Response) {
   const temp = temporaryPassword();
   const passwordHash = await bcrypt.hash(temp, BCRYPT_ROUNDS);
   await prisma.$transaction([
-    prisma.user.update({ where: { id }, data: { passwordHash, mustChangePassword: true } }),
+    // tokenVersion++ signs the user out everywhere: whoever holds their current
+    // tokens (possibly the reason for the reset) loses access immediately.
+    prisma.user.update({
+      where: { id },
+      data: { passwordHash, mustChangePassword: true, tokenVersion: { increment: 1 } },
+    }),
     // Any reset link already sent for this account stops working.
     prisma.passwordResetToken.updateMany({ where: { userId: id, usedAt: null }, data: { usedAt: new Date() } }),
   ]);

@@ -31,7 +31,7 @@ Migrations, in order: `init`, `scheduling_prefs`, `session_completion`,
 NOT NULL), `courses_lessons` (Course, Lesson, Course.subjectId, Task.lessonId),
 `password_reset` (hashed, single-use reset tokens), `task_in_progress` and
 `backfill_in_progress` (IN_PROGRESS status), `must_change_password` (flag set
-by an admin-issued temporary password).
+by an admin-issued temporary password), `token_version` (session revocation).
 
 Tests (Node's built-in runner, no extra framework):
 
@@ -358,6 +358,11 @@ Deleting a course deletes its lessons. Its tasks are kept and just unlinked.
   recover through an admin-issued temporary password instead.
 - **Change password** (Account page): `POST /api/account/password` with the
   current and new password. Also clears an admin-issued temporary password.
+- **Signing out other devices:** changing the password, using a reset link or
+  an admin temporary password increments `User.tokenVersion`, which every JWT
+  carries. Older tokens get 401 on their next request and that browser lands on
+  the login page with a "session has ended" notice. The device that changed the
+  password receives a fresh token and stays signed in.
 - **Delete account** (Account page): requires the current password and typing
   DELETE. Cascades to everything the user owns. The only remaining super admin
   cannot delete themselves.

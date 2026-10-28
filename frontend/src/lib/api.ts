@@ -23,6 +23,18 @@ export class ApiError extends Error {
   }
 }
 
+// Fired when an AUTHENTICATED request gets 401: the token expired or was
+// revoked server-side (password change elsewhere, admin reset, account
+// deleted). AuthProvider listens and signs this tab out. Unauthenticated
+// calls (login with a wrong password) never fire it.
+export const UNAUTHORIZED_EVENT = "schediq:unauthorized";
+
+function signalIfRevoked(status: number, token: string | null | undefined) {
+  if (status === 401 && token && typeof window !== "undefined") {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
+}
+
 function toApiError(body: { error?: string; code?: string; details?: { fieldErrors?: Record<string, string[]> } }, status: number) {
   return new ApiError(body.error ?? "Request failed", status, body.details?.fieldErrors ?? {}, body.code);
 }
@@ -49,6 +61,7 @@ async function request<T>(
   const body = await res.json().catch(() => ({}));
 
   if (!res.ok) {
+    signalIfRevoked(res.status, token);
     throw toApiError(body, res.status);
   }
 
@@ -63,6 +76,7 @@ async function requestFile(path: string, token: string, init: RequestInit = {}) 
     headers: { Authorization: `Bearer ${token}`, ...init.headers },
   });
   if (!res.ok) {
+    signalIfRevoked(res.status, token);
     throw toApiError(await res.json().catch(() => ({})), res.status);
   }
   const disposition = res.headers.get("Content-Disposition") ?? "";
@@ -83,7 +97,10 @@ async function requestUpload<T>(path: string, token: string, form: FormData): Pr
     headers: { Authorization: `Bearer ${token}` },
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw toApiError(body, res.status);
+  if (!res.ok) {
+    signalIfRevoked(res.status, token);
+    throw toApiError(body, res.status);
+  }
   return body as T;
 }
 
@@ -420,7 +437,8 @@ export const accountApi = {
     }),
   // Self-service password change; also clears an admin-issued temporary password.
   changePassword: (token: string, currentPassword: string, newPassword: string) =>
-    request<{ user: AuthUser; message: string }>("/api/account/password", {
+    // Returns a NEW token: the server revokes all older ones (other devices).
+    request<{ token: string; user: AuthUser; message: string }>("/api/account/password", {
       method: "POST",
       body: JSON.stringify({ currentPassword, newPassword }),
       token,

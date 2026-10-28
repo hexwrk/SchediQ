@@ -4,7 +4,7 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import { appUrl, env } from "../lib/env";
 import { prisma } from "../lib/prisma";
-import { signToken } from "../lib/jwt";
+import { tokenFor } from "../lib/jwt";
 import { emailField, nameField, passwordField } from "../lib/validators";
 
 // bcrypt work factor. 12 rounds = 2^12 key-expansion iterations, roughly
@@ -65,7 +65,7 @@ export async function register(req: Request, res: Response) {
     data: { email, passwordHash, name },
   });
 
-  const token = signToken({ userId: user.id });
+  const token = tokenFor(user);
   return res.status(201).json({ token, user: toPublicUser(user) });
 }
 
@@ -90,7 +90,7 @@ export async function login(req: Request, res: Response) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
 
-  const token = signToken({ userId: user.id });
+  const token = tokenFor(user);
   return res.json({ token, user: toPublicUser(user) });
 }
 
@@ -182,7 +182,12 @@ export async function resetPassword(req: Request, res: Response) {
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
   await prisma.$transaction([
-    prisma.user.update({ where: { id: record.userId }, data: { passwordHash, mustChangePassword: false } }),
+    // tokenVersion++ logs out every existing session: if the reset was needed
+    // because someone else had the account, their tokens die here.
+    prisma.user.update({
+      where: { id: record.userId },
+      data: { passwordHash, mustChangePassword: false, tokenVersion: { increment: 1 } },
+    }),
     // Burn this token and any other outstanding ones for the account.
     prisma.passwordResetToken.updateMany({
       where: { userId: record.userId, usedAt: null },
