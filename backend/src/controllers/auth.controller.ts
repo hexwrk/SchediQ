@@ -1,11 +1,13 @@
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { Request, Response } from "express";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { appUrl, env } from "../lib/env";
 import { prisma } from "../lib/prisma";
 import { tokenFor } from "../lib/jwt";
-import { emailField, nameField, passwordField } from "../lib/validators";
+import { emailField, nameField, passwordContextFrom, passwordFieldFor, usernameField } from "../lib/validators";
+import { usernameErrors } from "../../../shared/validation";
 
 // bcrypt work factor. 12 rounds = 2^12 key-expansion iterations, roughly
 // 200-300ms per hash on commodity hardware: slow enough to make offline
@@ -16,13 +18,24 @@ export const BCRYPT_ROUNDS = 12;
 // CPU time on logins for unknown emails.
 const DUMMY_HASH = bcrypt.hashSync("schediq-timing-equaliser", BCRYPT_ROUNDS);
 
-// Email/password/name rules come from shared/validation.ts, the same module the
-// register form uses, so client and server reject exactly the same input.
-const registerSchema = z.object({
-  email: emailField,
-  password: passwordField,
-  name: nameField,
-});
+// Email/username/password/name rules come from shared/validation.ts, the same
+// module the register form uses, so client and server reject exactly the same
+// input. Built per request because the password must not contain the
+// username or email name typed in the same body.
+function registerSchema(body: unknown) {
+  return z.object({
+    email: emailField,
+    username: usernameField,
+    password: passwordFieldFor(passwordContextFrom(body)),
+    name: nameField,
+  });
+}
+
+const USERNAME_TAKEN = "That username is already taken.";
+
+function usernameTaken(res: Response) {
+  return res.status(409).json({ error: USERNAME_TAKEN, details: { fieldErrors: { username: [USERNAME_TAKEN] } } });
+}
 
 // Login only checks shape: applying the full email rule here would leak which
 // addresses are "valid" and lock out any pre-existing account.
@@ -34,6 +47,7 @@ const loginSchema = z.object({
 export function toPublicUser(user: {
   id: string;
   email: string;
+  username: string;
   name: string;
   role: string;
   accountType: string;
@@ -43,6 +57,7 @@ export function toPublicUser(user: {
   return {
     id: user.id,
     email: user.email,
+    username: user.username,
     name: user.name,
     role: user.role,
     accountType: user.accountType,
@@ -51,7 +66,7 @@ export function toPublicUser(user: {
 }
 
 export async function register(req: Request, res: Response) {
-  const { email, password, name } = registerSchema.parse(req.body);
+  const { email, username, password, name } = registerSchema(req.body).parse(req.body);
 
   const existing = await prisma.user.findFirst({
     where: { email: { equals: email, mode: "insensitive" } },
@@ -60,10 +75,26 @@ export async function register(req: Request, res: Response) {
     return res.status(409).json({ error: "Email already registered" });
   }
 
+  if (await prisma.user.findUnique({ where: { username }, select: { id: true } })) {
+    return usernameTaken(res);
+  }
+
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-  const user = await prisma.user.create({
-    data: { email, passwordHash, name },
-  });
+  let user;
+  try {
+    user = await prisma.user.create({
+      data: { email, username, passwordHash, name },
+    });
+  } catch (err) {
+    // Two sign-ups racing for the same name: the unique index decides, and
+    // the loser gets the same field error as the pre-check above.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      const target = String((err.meta as { target?: unknown } | undefined)?.target ?? "");
+      if (target.includes("username")) return usernameTaken(res);
+      return res.status(409).json({ error: "Email already registered" });
+    }
+    throw err;
+  }
 
   const token = tokenFor(user);
   return res.status(201).json({ token, user: toPublicUser(user) });
@@ -94,6 +125,24 @@ export async function login(req: Request, res: Response) {
   return res.json({ token, user: toPublicUser(user) });
 }
 
+const usernameQuery = z.object({ username: z.string().max(100).default("") });
+
+// GET /api/auth/username-available?username=...
+// Live availability for the register form. Format problems come back as
+// reasons (same rules as register) so the form needs one call, not two.
+// Usernames are public handles, not credentials, so revealing that one is
+// taken is acceptable; the route is still rate limited against bulk scraping.
+export async function usernameAvailable(req: Request, res: Response) {
+  const { username } = usernameQuery.parse(req.query);
+  const normalised = username.trim().toLowerCase();
+  const problems = usernameErrors(normalised);
+  if (problems.length > 0) {
+    return res.json({ username: normalised, available: false, reasons: problems });
+  }
+  const taken = await prisma.user.findUnique({ where: { username: normalised }, select: { id: true } });
+  return res.json({ username: normalised, available: !taken, reasons: taken ? [USERNAME_TAKEN] : [] });
+}
+
 export async function me(req: Request, res: Response) {
   const user = await prisma.user.findUnique({ where: { id: req.userId } });
   if (!user) {
@@ -112,9 +161,11 @@ const forgotSchema = z.object({
   email: z.string().trim().min(1, "Email is required.").max(254).transform((v) => v.toLowerCase()),
 });
 
+// Password is only shape-checked here; the full rules run once the token has
+// identified the account, because they depend on its username and email.
 const resetSchema = z.object({
   token: z.string().min(20, "This reset link is invalid.").max(200),
-  password: passwordField,
+  password: z.string({ message: "Password is required." }).max(200),
 });
 
 // SHA-256 of the raw token. The raw token only ever exists in the link; the DB
@@ -179,6 +230,12 @@ export async function resetPassword(req: Request, res: Response) {
   if (!record || record.usedAt || record.expiresAt.getTime() < Date.now()) {
     return res.status(400).json({ error: "This reset link is invalid or has expired. Request a new one." });
   }
+  const owner = await prisma.user.findUnique({ where: { id: record.userId }, select: { email: true, username: true } });
+  if (!owner) {
+    return res.status(400).json({ error: "This reset link is invalid or has expired. Request a new one." });
+  }
+  // Throws a ZodError (400 with one message per failing rule) on a weak password.
+  z.object({ password: passwordFieldFor(owner) }).parse({ password });
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
   await prisma.$transaction([

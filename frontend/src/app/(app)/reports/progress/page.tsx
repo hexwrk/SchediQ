@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import { progressApi, sessionsApi, tasksApi } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { BarChart, DonutChart } from "@/lib/charts";
 import { inDateRange, toDateInput } from "@/lib/dates";
-import { ChartCard, CsvCell, Kv, Range, ReportFrame, ReportTable, downloadCsv, slugDate } from "@/lib/report";
+import { downloadReportPdf } from "@/lib/pdf";
+import { ChartCard, CsvCell, Kv, Range, ReportFrame, ReportTable, downloadCsv, rangeLabel, slugDate } from "@/lib/report";
 import { ErrorState, LoadingState } from "@/lib/states";
 import { useApi } from "@/lib/use-api";
 
@@ -21,6 +23,7 @@ async function loadProgress(token: string) {
 // R3: XP, study time, completion and mastery. The range filters the activity
 // figures (XP earned, study time); totals like level and mastery are "as of now".
 export default function ProgressReport() {
+  const { user } = useAuth();
   const { data, error, loading, reload, reloading } = useApi("report-progress", loadProgress);
   const [range, setRange] = useState<Range>(() => {
     const today = new Date();
@@ -56,6 +59,15 @@ export default function ProgressReport() {
   });
   const xpRows: CsvCell[][] = progress.xpRules.sources.map((s) => [s.label, s.amount, progress.breakdown[s.source]]);
   const subjectHead = ["Subject", "Tasks", "Done", "Completion", "Mastery", "Change (week)"];
+  const summary: [string, string | number][] = [
+    ["XP in period", xpInRange],
+    ["Study hours in period", (studyMin / 60).toFixed(1)],
+    ["Task completion", `${rate}%`],
+    ["Level / streak", `${progress.level} · ${progress.streak}d`],
+  ];
+  const xpPerDay = xpDays.map((d) => ({ label: d.date.slice(5), value: d.xp }));
+  const masteryBySubject = overview.mastery.map((m) => ({ label: m.name, value: m.mastery, color: m.colorTag }));
+  const badges = progress.badges.filter((b) => b.unlocked).map((b) => b.label).join(", ") || "None yet";
 
   return (
     <ReportFrame
@@ -79,22 +91,34 @@ export default function ProgressReport() {
           ...xpRows.map((r) => ["XP source (all time)", ...r]),
         ])
       }
+      onPdf={() =>
+        downloadReportPdf({
+          filename: `schediq-progress-${slugDate()}.pdf`,
+          title: "Progress report",
+          subtitle: "Experience points, study time, completion and subject mastery",
+          user,
+          period: rangeLabel(range),
+          summary: [...summary, ["Total XP", progress.xp], ["Level title", progress.levelTitle]],
+          charts: [
+            { title: "XP earned per day", data: xpPerDay, unit: "XP" },
+            { title: "Mastery by subject", data: masteryBySubject, unit: "% mastery" },
+          ],
+          tables: [
+            { title: "Per-subject completion and mastery", head: subjectHead, rows: subjectRows, align: ["l", "r", "r", "r", "r", "r"] },
+            { title: "XP by source (all time)", head: ["Source", "Rule", "XP"], rows: xpRows, align: ["l", "l", "r"] },
+          ],
+          notes: [`Badges unlocked: ${badges}`, "Level, streak and mastery are as of today; XP and study time cover the period."],
+        })
+      }
     >
-      <Kv
-        items={[
-          ["XP in period", xpInRange],
-          ["Study hours in period", (studyMin / 60).toFixed(1)],
-          ["Task completion", `${rate}%`],
-          ["Level / streak", `${progress.level} · ${progress.streak}d`],
-        ]}
-      />
+      <Kv items={summary} />
       <ChartCard title="XP earned per day">
-        <BarChart data={xpDays.map((d) => ({ label: d.date.slice(5), value: d.xp }))} unit="XP" ariaLabel="XP earned per day" />
+        <BarChart data={xpPerDay} unit="XP" ariaLabel="XP earned per day" />
       </ChartCard>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 print:grid-cols-2">
         <ChartCard title="Mastery by subject">
           <BarChart
-            data={overview.mastery.map((m) => ({ label: m.name, value: m.mastery, color: m.colorTag }))}
+            data={masteryBySubject}
             unit="% mastery"
             ariaLabel="Mastery percentage by subject"
           />
@@ -112,7 +136,7 @@ export default function ProgressReport() {
       </section>
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-semibold">Badges</h2>
-        <p className="text-sm">{progress.badges.filter((b) => b.unlocked).map((b) => b.label).join(", ") || "None yet"}</p>
+        <p className="text-sm">{badges}</p>
       </section>
     </ReportFrame>
   );

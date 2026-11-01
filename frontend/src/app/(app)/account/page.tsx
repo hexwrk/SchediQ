@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { PASSWORD_RULE, validatePassword } from "@shared/validation";
+import { PasswordChecklist, passwordReady } from "@/lib/password";
 import { accountApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { FieldError, FieldErrors, hasErrors, inputClass, serverFieldErrors } from "@/lib/form";
@@ -54,6 +55,8 @@ export default function AccountPage() {
         <dl className="grid grid-cols-[120px_1fr] gap-y-2 text-sm">
           <dt className="text-text-muted">Name</dt>
           <dd>{user.name}</dd>
+          <dt className="text-text-muted">Username</dt>
+          <dd className="font-mono">@{user.username}</dd>
           <dt className="text-text-muted">Email</dt>
           <dd className="break-all">{user.email}</dd>
           <dt className="text-text-muted">Role</dt>
@@ -122,6 +125,8 @@ function ChangePasswordForm() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // The signed-in account: the new password must not contain these.
+  const ctx = { username: user?.username, email: user?.email };
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -130,7 +135,7 @@ function ChangePasswordForm() {
     setNotice(null);
     const found: FieldErrors<PwField> = {};
     if (!currentPassword) found.currentPassword = "Enter your current password.";
-    const rule = validatePassword(newPassword);
+    const rule = validatePassword(newPassword, ctx);
     if (rule) found.newPassword = rule;
     if (confirmPassword !== newPassword) found.confirmPassword = "The two new passwords do not match.";
     setErrors(found);
@@ -183,8 +188,10 @@ function ChangePasswordForm() {
           value={newPassword}
           onChange={(e) => setNewPassword(e.target.value)}
           aria-invalid={!!errors.newPassword}
+          aria-describedby="new-password-rules"
           className={inputClass(errors.newPassword)}
         />
+        <PasswordChecklist id="new-password-rules" password={newPassword} context={ctx} />
         <FieldError message={errors.newPassword} />
       </label>
       <label className="flex flex-col gap-1 text-sm">
@@ -204,7 +211,7 @@ function ChangePasswordForm() {
       <div>
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || !currentPassword || !passwordReady(newPassword, ctx) || newPassword !== confirmPassword}
           className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
         >
           {saving ? "Saving..." : "Change password"}

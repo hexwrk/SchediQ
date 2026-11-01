@@ -224,10 +224,12 @@ function Shell({
             <div className="flex items-center gap-3">
               <ThemeToggle />
               <TierBadge user={user} />
-              <span className="hidden text-text-muted md:inline">{userLabel}</span>
+              <span className="hidden text-text-muted md:inline">
+                {userLabel} {user.username && <span className="font-mono text-xs">@{user.username}</span>}
+              </span>
               <Link
                 href="/account"
-                title="Account"
+                title={user.username ? `Account (@${user.username})` : "Account"}
                 className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
               >
                 {userLabel.slice(0, 1).toUpperCase()}

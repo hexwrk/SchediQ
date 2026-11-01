@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/auth-context";
 import { FieldError, FieldErrors, UpgradePrompt, collectErrors, hasErrors, inputClass, serverFieldErrors } from "@/lib/form";
 import { CapIcon, SparkIcon } from "@/lib/icons";
 import { LevelPill, ProgressBar } from "@/lib/ui";
+import { SearchBox, matchesQuery, useDebounced } from "@/lib/search";
 import { EmptyState, ErrorState, LoadingState } from "@/lib/states";
 import { errorMessage, useApi } from "@/lib/use-api";
 
@@ -28,6 +29,9 @@ export default function CoursesPage() {
   const subjects: Subject[] = data?.subjects ?? [];
   const usage: Usage | null = data?.usage ?? null;
   const [actionError, setActionError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const query = useDebounced(search);
+  const shown = courses.filter((c) => matchesQuery(query, c.title, c.topic, c.subject?.name, c.level));
 
   const [topic, setTopic] = useState("");
   const [level, setLevel] = useState<CourseLevel>("BEGINNER");
@@ -106,17 +110,34 @@ export default function CoursesPage() {
           Learn a topic step by step. Lessons and quizzes earn XP and raise the linked subject&rsquo;s mastery.
         </p>
         {actionError && <ErrorState title="That didn't work" message={actionError} />}
+        {courses.length > 0 && (
+          <SearchBox
+            value={search}
+            onChange={setSearch}
+            placeholder="Search courses by title, topic or subject"
+            label="Search courses"
+            shown={shown.length}
+            total={courses.length}
+          />
+        )}
         {loading ? (
           <LoadingState label="Loading courses" />
         ) : error && !data ? (
           <ErrorState message={error} onRetry={reload} retrying={reloading} />
+        ) : courses.length > 0 && shown.length === 0 ? (
+          <EmptyState
+            title="No matching courses"
+            body={`Nothing matches "${query}".`}
+            onAction={() => setSearch("")}
+            actionLabel="Clear search"
+          />
         ) : courses.length === 0 ? (
           <EmptyState
             title="No courses yet"
             body="Tell SchediQ what you want to learn and it builds a step-by-step course with quizzes. Link it to a weak subject to raise that subject's mastery."
           />
         ) : (
-          courses.map((c) => (
+          shown.map((c) => (
             <div key={c.id} className="flex flex-col gap-3 rounded-card border border-border bg-surface p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">

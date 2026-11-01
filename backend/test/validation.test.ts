@@ -1,12 +1,21 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
+  RESERVED_USERNAMES,
+  isCommonPassword,
+  normalizeUsername,
+  passwordChecks,
+  passwordErrors,
   passwordStrength,
+  usernameErrors,
   validateEmail,
   validateIntInRange,
   validateName,
   validatePassword,
   validateTimeWindow,
+  validateUsername,
 } from "../../shared/validation";
 
 // These are the SAME functions the frontend forms import, so passing here means
@@ -34,17 +43,75 @@ describe("shared email validator", () => {
 });
 
 describe("shared password validator", () => {
-  it("rejects short, letter-only, digit-only and over-72", () => {
-    assert.notEqual(validatePassword("abc123"), null);
-    assert.notEqual(validatePassword("abcdefgh"), null);
-    assert.notEqual(validatePassword("12345678"), null);
-    assert.notEqual(validatePassword("a1".repeat(37)), null);
+  const ctx = { username: "tristan_j", email: "tjoubert@gmail.com" };
+  const ids = (pw: string, c = {}) => passwordChecks(pw, c).filter((r) => !r.passed).map((r) => r.id);
+
+  it("accepts a strong password", () => {
+    assert.equal(validatePassword("Correct-Horse-42", ctx), null);
+    assert.deepEqual(passwordErrors("Correct-Horse-42", ctx), []);
   });
-  it("accepts 8+ with a letter and a number", () => assert.equal(validatePassword("abc12345"), null));
-  it("grades strength", () => {
+  it("reports EVERY failing rule, one message each", () => {
+    assert.deepEqual(ids("abc"), ["length", "upper", "digit", "symbol", "common"]);
+    assert.equal(passwordErrors("abc").length, 5);
+    assert.deepEqual(ids("alllowercase12!"), ["upper"]);
+    assert.deepEqual(ids("ALLUPPERCASE12!"), ["lower"]);
+    assert.deepEqual(ids("NoDigitsHere!!"), ["digit"]);
+    assert.deepEqual(ids("NoSymbolsHere12"), ["symbol"]);
+    assert.deepEqual(ids("Aa1!" + "x".repeat(70)), ["max"]);
+    assert.deepEqual(passwordErrors(""), ["Password is required."]);
+  });
+  it("rejects a password containing the username or email name (case-insensitive)", () => {
+    assert.deepEqual(ids("My-TRISTAN_J-2026", ctx), ["personal"]);
+    assert.deepEqual(ids("xTJoubert#2026", ctx), ["personal"]);
+    // +tag is ignored, 1-2 char names are not enforced.
+    assert.deepEqual(ids("Hello-Anna-2026x", { email: "anna+uni@x.com" }), ["personal"]);
+    assert.deepEqual(ids("Correct-Horse-42", { username: "co", email: "jo@x.com" }), []);
+  });
+  it("rejects common passwords even when dressed up to pass composition", () => {
+    for (const pw of ["Password123!", "P@ssw0rd!2024", "Qwerty123456!", "Welcome@2026", "Admin12345!!", "PasswordPassword1!"]) {
+      assert.ok(isCommonPassword(pw), pw);
+      assert.deepEqual(ids(pw), ["common"], pw);
+    }
+    assert.ok(isCommonPassword("123456"));
+    assert.ok(!isCommonPassword("Correct-Horse-42"));
+  });
+  it("grades strength; anything failing a rule is weak", () => {
     assert.equal(passwordStrength("abc"), "weak");
-    assert.equal(passwordStrength("abc12345"), "fair");
-    assert.equal(passwordStrength("Abc12345!xyzQ"), "strong");
+    assert.equal(passwordStrength("Password123!"), "weak");
+    assert.equal(passwordStrength("Horsebattery9!"), "good");
+    assert.equal(passwordStrength("Horse!battery-staple9"), "strong");
+  });
+});
+
+describe("shared username validator", () => {
+  it("normalises (trim + lower-case) before checking", () => {
+    assert.equal(normalizeUsername("  Tristan_J "), "tristan_j");
+    assert.equal(validateUsername("  Tristan_J "), null);
+  });
+  const reject: [string, RegExp][] = [
+    ["", /required/],
+    ["ab", /at least 3/],
+    ["a".repeat(21), /at most 20/],
+    ["john doe", /spaces/],
+    ["1john", /start with a letter/],
+    ["_john", /start with a letter/],
+    ["john.doe", /lowercase letters, numbers and underscores/],
+    ["jöhn", /lowercase letters, numbers and underscores/],
+    ["admin", /reserved/],
+    ["ROOT", /reserved/],
+  ];
+  for (const [u, msg] of reject) it(`rejects "${u}"`, () => assert.match(validateUsername(u) ?? "", msg));
+  it("reports every failing rule", () => {
+    assert.equal(usernameErrors("1 a.").length, 3);
+  });
+  it("accepts valid names", () => {
+    for (const u of ["abc", "tristan_j", "user2026", "a".repeat(20)]) assert.equal(validateUsername(u), null, u);
+  });
+  it("the backfill migration reserves exactly the shared list", () => {
+    const sql = readFileSync(join(__dirname, "../prisma/migrations/20261101090000_user_username/migration.sql"), "utf8");
+    const block = /ARRAY\[([\s\S]*?)\]/.exec(sql)?.[1] ?? "";
+    const inSql = [...block.matchAll(/'([a-z0-9_]+)'/g)].map((m) => m[1]);
+    assert.deepEqual([...inSql].sort(), [...RESERVED_USERNAMES].sort());
   });
 });
 

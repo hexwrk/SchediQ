@@ -5,6 +5,7 @@ import {
   HEX_COLOR,
   NUMBER_LIMITS,
   NumberField,
+  PasswordContext,
   SUBJECT_NAME_MAX,
   TITLE_MAX,
   ValidationResult,
@@ -12,8 +13,10 @@ import {
   validateEmail,
   validateHHMM,
   validateIntInRange,
+  normalizeUsername,
+  passwordErrors,
+  usernameErrors,
   validateName,
-  validatePassword,
   validateRequiredText,
   validateTopic,
 } from "../../../shared/validation";
@@ -38,7 +41,39 @@ export const emailField = z
   .superRefine(fromShared(validateEmail))
   .transform((v) => v.toLowerCase());
 
-export const passwordField = z.string().superRefine(fromShared(validatePassword));
+// One zod issue PER failing rule (not just the first), so the 400 lists every
+// broken rule under the field, matching the form's live checklist.
+function fromSharedAll<T>(check: (value: T) => string[]) {
+  return (value: T, ctx: z.RefinementCtx) => {
+    for (const message of check(value)) ctx.addIssue({ code: "custom", message });
+  };
+}
+
+// The password rules depend on who the password is for (it must not contain
+// their username or email name), so the field is built per request with that
+// context. passwordField (no context) is for callers that have none.
+export function passwordFieldFor(context: PasswordContext) {
+  return z.string({ message: "Password is required." }).superRefine(fromSharedAll((v: string) => passwordErrors(v, context)));
+}
+
+export const passwordField = passwordFieldFor({});
+
+// Trimmed and lower-cased BEFORE the rules run and before it is stored, so
+// " Tristan" and "tristan" are the same name (the DB unique index is exact).
+export const usernameField = z
+  .string({ message: "Username is required." })
+  .transform(normalizeUsername)
+  .superRefine(fromSharedAll(usernameErrors));
+
+// Pulls the identity fields out of an unparsed body for passwordFieldFor, so
+// register can check the password against the username/email in the same pass.
+export function passwordContextFrom(body: unknown): PasswordContext {
+  const raw = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  return {
+    username: typeof raw.username === "string" ? normalizeUsername(raw.username) : null,
+    email: typeof raw.email === "string" ? raw.email : null,
+  };
+}
 
 // Required: a missing name fails with the same message as a blank one.
 export const nameField = z

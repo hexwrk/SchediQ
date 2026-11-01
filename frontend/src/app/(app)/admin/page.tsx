@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AccessDenied } from "@/lib/access-denied";
 import { AccountType, AdminUser, Role, adminApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { FieldError, inputClass } from "@/lib/form";
+import { SearchBox, useDebounced } from "@/lib/search";
 import { EmptyState, ErrorState, LoadingState } from "@/lib/states";
 import { errorMessage, useApi } from "@/lib/use-api";
 
@@ -13,13 +14,34 @@ import { errorMessage, useApi } from "@/lib/use-api";
 // requireSuperAdmin.
 export default function AdminUsersPage() {
   const { token, user: me } = useAuth();
-  const { data, error: loadError, errorStatus, loading, reload, reloading } = useApi("admin-users", (t) =>
-    adminApi.users(t).then((r) => r.users)
-  );
-  const users: AdminUser[] = data ?? [];
+  const { data, error: loadError, errorStatus, loading, reload, reloading } = useApi("admin-users", (t) => adminApi.users(t));
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  // Server-side search: the list grows with every sign-up, so filtering runs
+  // in the database (GET /api/admin/users?q=), one request per typing pause.
+  const query = useDebounced(filter.trim());
+  // Bumped after a mutation so an active search re-runs and drops deleted rows.
+  const [searchNonce, setSearchNonce] = useState(0);
+  const [search, setSearch] = useState<{ query: string; nonce: number; users: AdminUser[]; error: string | null } | null>(null);
+
+  useEffect(() => {
+    if (!token || !query) return;
+    let active = true;
+    adminApi.users(token, query).then(
+      (r) => active && setSearch({ query, nonce: searchNonce, users: r.users, error: null }),
+      (err) => active && setSearch({ query, nonce: searchNonce, users: [], error: errorMessage(err, "Search failed") })
+    );
+    return () => {
+      active = false;
+    };
+  }, [token, query, searchNonce]);
+
+  const total = data?.total ?? 0;
+  const searching = !!query && (!search || search.query !== query || search.nonce !== searchNonce);
+  // While a new search is in flight, keep showing the previous rows (no flash).
+  const users: AdminUser[] = query ? (search?.users ?? []) : (data?.users ?? []);
+  const searchError = query && search?.query === query ? search.error : null;
   // Delete confirmation: the admin must type the account's email exactly.
   const [deleting, setDeleting] = useState<AdminUser | null>(null);
   const [confirmText, setConfirmText] = useState("");
@@ -32,7 +54,10 @@ export default function AdminUsersPage() {
   const [issued, setIssued] = useState<{ email: string; temporaryPassword: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const load = reload;
+  async function load() {
+    setSearchNonce((n) => n + 1);
+    await reload();
+  }
 
   async function confirmReset() {
     if (!token || !resetting) return;
@@ -105,22 +130,28 @@ export default function AdminUsersPage() {
   if (loading) return <LoadingState label="Loading users" />;
   if (loadError && !data) return <ErrorState message={loadError} onRetry={reload} retrying={reloading} />;
 
-  const q = filter.trim().toLowerCase();
-  const shown = q ? users.filter((u) => u.email.toLowerCase().includes(q) || u.name.toLowerCase().includes(q)) : users;
+  const shown = users;
 
   return (
     <div className="flex max-w-6xl flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-text-muted">
-          {users.length} accounts. Role and tier changes apply immediately (the role is checked on every request).
+          {total} accounts. Role and tier changes apply immediately (the role is checked on every request).
         </p>
-        <input
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter by name or email"
-          className={inputClass(null, "w-64 text-sm")}
-        />
+        <div className="flex items-center gap-2">
+          <SearchBox
+            value={filter}
+            onChange={setFilter}
+            placeholder="Search name, email or username"
+            label="Search users"
+            // Only once the server has answered for exactly what is typed.
+            shown={searching || filter.trim() !== query ? undefined : shown.length}
+            total={total}
+          />
+          {(searching || filter.trim() !== query) && <span className="text-xs text-text-muted">Searching...</span>}
+        </div>
       </div>
+      {searchError && <p className="text-sm text-red-600">{searchError}</p>}
       {error && <p className="text-sm text-red-600">{error}</p>}
       {notice && <p className="text-sm text-accent">{notice}</p>}
 
@@ -139,7 +170,7 @@ export default function AdminUsersPage() {
             </tr>
           </thead>
           <tbody>
-            {shown.length === 0 && (
+            {shown.length === 0 && !searching && (
               <tr>
                 <td colSpan={8} className="p-4">
                   <EmptyState title="No matching accounts" body={`Nothing matches "${filter}". Clear the filter to see everyone.`} onAction={() => setFilter("")} actionLabel="Clear filter" />
@@ -154,7 +185,9 @@ export default function AdminUsersPage() {
                     <span className="block font-medium">
                       {u.name} {self && <span className="text-xs text-text-muted">(you)</span>}
                     </span>
-                    <span className="text-xs text-text-muted">{u.email}</span>
+                    <span className="block text-xs text-text-muted">
+                      {u.email} {u.username && <span className="font-mono">@{u.username}</span>}
+                    </span>
                     {u.mustChangePassword && (
                       <span className="mt-1 block text-[11px] font-medium text-amber">Temporary password not yet changed</span>
                     )}

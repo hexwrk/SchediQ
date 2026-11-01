@@ -23,6 +23,19 @@ export function authLimiter(action: string) {
   });
 }
 
+// Lookups fired while typing (username availability): ~60 / 15 min / IP.
+// Enough for a real sign-up with plenty of edits, too slow to scrape the
+// username space.
+export function lookupLimiter(action: string) {
+  return rateLimit({
+    windowMs: FIFTEEN_MIN,
+    limit: 60,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { error: `Too many ${action} requests from this network. Try again in 15 minutes.`, code: "RATE_LIMITED" },
+  });
+}
+
 // AI endpoints: ~20 requests / hour / USER (every call can cost money). Keyed
 // by the authenticated user id, so it must be mounted after requireAuth; the
 // IP fallback only applies if that ordering is ever broken.

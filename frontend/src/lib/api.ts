@@ -110,6 +110,8 @@ export type AccountType = "FREE" | "PREMIUM";
 export interface AuthUser {
   id: string;
   email: string;
+  // Public handle (normalised lower-case). Login is still by email.
+  username: string;
   name: string;
   role: Role;
   accountType: AccountType;
@@ -123,11 +125,17 @@ export interface AuthResponse {
 }
 
 export const authApi = {
-  register: (email: string, password: string, name: string) =>
+  register: (email: string, username: string, password: string, name: string) =>
     request<AuthResponse>("/api/auth/register", {
       method: "POST",
-      body: JSON.stringify({ email, password, name }),
+      body: JSON.stringify({ email, username, password, name }),
     }),
+  // Live availability for the register form; format problems come back as reasons.
+  usernameAvailable: (username: string, signal?: AbortSignal) =>
+    request<{ username: string; available: boolean; reasons: string[] }>(
+      `/api/auth/username-available?username=${encodeURIComponent(username)}`,
+      { signal }
+    ),
   login: (email: string, password: string) =>
     request<AuthResponse>("/api/auth/login", {
       method: "POST",
@@ -550,6 +558,7 @@ export const lessonsApi = {
 export interface AdminUser {
   id: string;
   email: string;
+  username: string;
   name: string;
   role: Role;
   accountType: AccountType;
@@ -568,6 +577,20 @@ export interface BackupLogEntry {
   filename: string;
   sizeBytes: number;
   actorEmail: string;
+  destination: "local" | "drive";
+  driveFileId: string | null;
+  driveLink: string | null;
+}
+
+export interface DriveBackupResult {
+  format: "sql" | "json";
+  filename: string;
+  sizeBytes: number;
+  rawBytes: number;
+  driveFileId: string;
+  driveLink: string;
+  fallbackReason?: string;
+  createdAt: string;
 }
 
 export interface AdminStats {
@@ -579,6 +602,8 @@ export interface AdminStats {
   lastRestore: BackupLogEntry | null;
   // In-app backup is a local/demo feature; production backups are Neon's.
   backup: { enabled: boolean; message: string | null; pgDumpAvailable: boolean };
+  // Off-site backup to Google Drive. Never carries any credential, only flags.
+  drive: { configured: boolean; scheduled: boolean; lastBackup: BackupLogEntry | null };
   generatedAt: string;
 }
 
@@ -589,7 +614,12 @@ export interface DataModel {
 }
 
 export const adminApi = {
-  users: (token: string) => request<{ users: AdminUser[] }>("/api/admin/users", { token }),
+  // Server-side search (name, email or username) so the list scales with sign-ups.
+  users: (token: string, q = "") =>
+    request<{ users: AdminUser[]; total: number; query: string }>(
+      `/api/admin/users${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`,
+      { token }
+    ),
   updateUser: (token: string, id: string, data: { role?: Role; accountType?: AccountType }) =>
     request<{ user: AuthUser }>(`/api/admin/users/${id}`, {
       method: "PATCH",
@@ -607,6 +637,8 @@ export const adminApi = {
   stats: (token: string) => request<AdminStats>("/api/admin/stats", { token }),
   dataModel: (token: string) => request<DataModel>("/api/admin/data-model", { token }),
   backup: (token: string) => requestFile("/api/admin/backup", token, { method: "POST" }),
+  // Off-site: the server uploads a gzipped full dump to Google Drive and returns its link.
+  driveBackup: (token: string) => request<DriveBackupResult>("/api/admin/backup/drive", { method: "POST", token }),
   restore: (token: string, file: File) => {
     const form = new FormData();
     form.append("confirm", "RESTORE");

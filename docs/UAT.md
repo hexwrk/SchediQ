@@ -1,14 +1,14 @@
 # SchediQ: User Acceptance Test checklist
 
 Run against a freshly seeded database (`cd backend && npx prisma db seed`, which
-creates only `admin@schediq.app`; register student accounts during the test) with
+creates only `admin@schediq.app`, password `Study-Plan-2026!`; register student accounts during the test) with
 the API on :4000 and the app on :3000. Tick each row; note any failure with the
 step number.
 
 | # | Area | Steps | Expected result | Pass |
 | --- | --- | --- | --- | --- |
-| 1 | Register: validation | Sign up with name blank, email `yd@g.com`, password `abcdefgh` | Inline errors under all three fields; nothing submitted | [ ] |
-| 2 | Register: success | Sign up with a real name, `you@gmail.com`, `abc12345` | Lands on the dashboard; row visible in Prisma Studio (`npx prisma studio`) | [ ] |
+| 1 | Register: validation | Sign up with name blank, email `yd@g.com`, username `1 Bad.Name`, password `password` | Inline errors under every field; the username lists each broken rule (spaces, must start with a letter, allowed characters); the password checklist shows red crosses for length, uppercase, number, symbol and "Not a common password", strength Weak; Sign up stays disabled | [ ] |
+| 2 | Register: success | Sign up with a real name, username `  You_2026 `, `you@gmail.com`, `Correct-Horse-42` | Username shows "you_2026 is available"; every checklist line ticks green; lands on the dashboard; Account shows `@you_2026`; row visible in Prisma Studio | [ ] |
 | 3 | First run | As the new account, open the Dashboard | 3-step onboarding checklist, "No study blocks this week" with an Add a task button. No blank widgets | [ ] |
 | 4 | Empty states | Open Task list, Subjects, Courses | Each explains what goes there and links to the next action | [ ] |
 | 5 | Login / forgot password | Log out, click "Forgot password?", enter the email | Generic message plus (demo mode) "Open reset link"; setting a new password works; the old one is rejected; reusing the link fails | [ ] |
@@ -41,6 +41,16 @@ step number.
 | 32 | Rate limits | Wrong password 11 times in a row; 21 AI parses within an hour (Premium account) | 11th login gets "Too many login attempts" (429); 21st parse gets "AI request limit reached" (429) |
 | 33 | Fail-fast config | Start the API with `JWT_SECRET` removed from `.env` | Exits immediately listing "JWT_SECRET is required and must be at least 32 characters" |
 | 34 | Sign out everywhere | Log in as a student in two browsers; in browser 1 change the password on Account; in browser 2 click any page | Browser 1 stays signed in; browser 2 lands on Log in with "Your session has ended..." |
+| 35 | Password rules, server side | `curl -s -H 'Content-Type: application/json' -d '{"email":"x.y@gmail.com","username":"ab","password":"Password123!","name":"X"}' localhost:4000/api/auth/register` | `400`; `details.fieldErrors.username` = "at least 3 characters"; `details.fieldErrors.password` = "too common" (one message per failing rule) | [ ] |
+| 36 | Password: personal + common | Register with username `tristan_j` and password `My-Tristan_J-99`; then `P@ssw0rd!2026` | First: "must not contain your username or the name part of your email"; second: "Not a common password" fails; button disabled both times | [ ] |
+| 37 | Username taken / reserved | Register with `admin`, then with an existing account's username | "That username is reserved"; then "That username is already taken" (live, and `409` if submitted) | [ ] |
+| 38 | Reset / change password checklist | Forgot password link; type `short`; then Account > Change password with a password containing your email name | Live checklist + meter on both; Reset button disabled until the rules pass; Change password rejected with the personal-info message | [ ] |
+| 39 | Username backfill | On a DB with accounts created before this release: `npx prisma migrate deploy`, then `select email, username from "User"` | Migration applies with no error; every row has a unique 3-20 char lowercase username from its email (e.g. `first.last@x` -> `first_last`, duplicates get `1`, `2`...) | [ ] |
+| 40 | Search + delete | Tasks: type part of one task's title; Delete it; clear the search. Repeat on Subjects and Courses. Admin Users: search by part of an email, then a username | List narrows with "N of M shown"; a no-match query shows "No matching..." with Clear search; delete asks to confirm and removes only that row; admin search hits the server (`/api/admin/users?q=` in DevTools Network) | [ ] |
+| 41 | PDF reports | Reports > Study schedule, Workload summary, Progress report: Download PDF on each | A `.pdf` file downloads (no print dialog) with title, generated date, your name/username/email, period, summary totals, bar chart(s) and the table(s), matching the screen; opens in any PDF viewer | [ ] |
+| 42 | Drive backup not configured | With no `GOOGLE_DRIVE_*` vars, open System & backup | "Configure Google Drive backup" box with a link to the setup guide; no error; `POST /api/admin/backup/drive` returns `409 DRIVE_NOT_CONFIGURED`; local Create backup still works | [ ] |
+| 43 | Drive backup | Set the three `GOOGLE_DRIVE_*` vars (docs/GOOGLE_DRIVE_BACKUP.md), restart, click Back up to Google Drive | Success with a clickable Drive link; a `schediq-backup-<timestamp>.sql.gz` (or `.json.gz`) is in the "SchediQ Backups" folder; "Last Drive backup" updates; `BackupLog` has a row with `destination = drive` | [ ] |
+| 44 | Restore a Drive backup (scratch DB) | Download the `.sql.gz` from Drive, upload it on Restore, type RESTORE | Restores like a `.sql` file | [ ] |
 
 Automated checks before a demo:
 

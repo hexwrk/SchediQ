@@ -11,7 +11,11 @@ shown in code.
   work, and 12 takes roughly 200-300 ms per hash. That is unnoticeable at login
   but makes offline cracking of a leaked hash expensive. bcrypt salts every hash,
   so identical passwords produce different hashes and rainbow tables do not work.
-- The password rule is 8-72 characters with at least one letter and one number.
+- The password rule is 12-72 characters with an uppercase letter, a lowercase
+  letter, a number and a symbol; it must not contain the username or the email
+  name, and must not be on the shipped common-password blocklist (matched after
+  stripping bolted-on digits/symbols and l33t swaps). Each failing rule gets its
+  own message from the same shared function on the client and the server.
   The cap is 72 because bcrypt ignores input beyond 72 bytes; a longer password
   would only look stronger.
 - Plain-text passwords are never stored or logged. `passwordHash` is excluded
@@ -53,7 +57,7 @@ shown in code.
   access is sensitive until a real mailer replaces it.
 - **Admin recovery without email:** `POST /api/admin/users/:id/reset-password`
   (super admin only, not for the admin's own account) sets a random temporary
-  password (16 chars from a 31-symbol alphabet via `crypto.randomInt`, ~79
+  password (16 chars from a 55-symbol mixed-case alphabet via `crypto.randomInt`, ~92
   bits), burns outstanding reset links, signs the user out everywhere
   (`tokenVersion`), sets `mustChangePassword`, and returns
   the password once with `Cache-Control: no-store`. It is never logged; the log
@@ -170,6 +174,14 @@ Every query for user data is scoped to the authenticated user:
 - In production (`DEMO_MODE=false`, or a production host without `pg_dump`)
   both endpoints return `409 BACKUP_DISABLED` and the UI explains that Neon
   manages backups, so no database dump can be pulled through the web app.
+- **Off-site Google Drive backup** (`POST /api/admin/backup/drive`, super admin
+  only) works in production too, but the dump goes straight from the API to
+  the configured Drive, never to a browser. OAuth2 with the `drive.file` scope,
+  so the app can only touch files it created. The client secret and refresh
+  token are env-only, never logged or returned (the UI only gets a
+  configured flag), and Drive error logs redact token/secret patterns and never
+  print the request config (which holds the Authorization header). Restore
+  accepts `.gz` with a 256 MB unpacked cap against decompression bombs.
 
 ## 8. Account tiers
 

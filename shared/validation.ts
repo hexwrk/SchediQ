@@ -69,35 +69,169 @@ export function validateEmail(raw: string): ValidationResult {
 
 // ---------- Password ----------
 
-export const PASSWORD_MIN = 8;
+export const PASSWORD_MIN = 12;
 // bcrypt silently truncates input beyond 72 bytes, so a longer password would
 // give a false sense of extra strength. Cap it and say so.
 export const PASSWORD_MAX = 72;
-export const PASSWORD_RULE = `At least ${PASSWORD_MIN} characters, including at least one letter and one number.`;
+export const PASSWORD_RULE = `At least ${PASSWORD_MIN} characters with an uppercase letter, a lowercase letter, a number and a symbol. Must not contain your username or email name, or be a common password.`;
 
-export function validatePassword(pw: string): ValidationResult {
-  if (!pw) return "Password is required.";
-  if (pw.length < PASSWORD_MIN) return `Password must be at least ${PASSWORD_MIN} characters.`;
-  if (pw.length > PASSWORD_MAX) return `Password must be at most ${PASSWORD_MAX} characters.`;
-  if (!/[A-Za-z]/.test(pw)) return "Password must contain at least one letter.";
-  if (!/[0-9]/.test(pw)) return "Password must contain at least one number.";
-  return null;
+// Small shipped blocklist of the passwords credential-stuffing lists try
+// first. Matched after stripping leading/trailing digits and symbols and
+// undoing common l33t swaps, so "Password123!" and "P@ssw0rd!!" are caught by
+// the single entry "password" even though they pass the composition rules.
+export const COMMON_PASSWORDS: readonly string[] = [
+  "password", "passwort", "passcode", "qwerty", "qwertyuiop", "asdfgh", "asdfghjkl", "zxcvbnm",
+  "letmein", "welcome", "admin", "administrator", "iloveyou", "monkey", "dragon", "football",
+  "baseball", "soccer", "sunshine", "princess", "superman", "batman", "trustno", "master",
+  "shadow", "michael", "jennifer", "abc", "abcdef", "changeme", "secret", "login", "starwars",
+  "whatever", "hello", "freedom", "computer", "internet", "schediq", "student", "summer",
+  "winter", "spring", "autumn", "january", "december", "pokemon", "minecraft", "liverpool",
+  "chelsea", "arsenal", "manchester", "springbok", "pretoria", "johannesburg", "richfield",
+  "qazwsx", "default", "guest", "test", "user", "root", "access", "flower", "hunter", "killer",
+];
+// Exact entries that are already all digits/symbols, so the stripping above
+// would reduce them to "" (they also fail composition, but say why).
+const COMMON_EXACT: readonly string[] = ["123456", "12345678", "123456789", "1234567890", "111111", "000000", "123123", "654321"];
+const COMMON_SET = new Set(COMMON_PASSWORDS);
+
+const LEET: Record<string, string> = { "@": "a", "4": "a", "0": "o", "1": "i", "!": "i", "3": "e", "$": "s", "5": "s", "7": "t", "9": "g" };
+
+export function isCommonPassword(pw: string): boolean {
+  const lower = pw.toLowerCase();
+  if (COMMON_EXACT.includes(lower)) return true;
+  // Strip the digits/symbols people bolt on to satisfy composition rules.
+  const core = lower.replace(/^[^a-z]+|[^a-z]+$/g, "");
+  if (!core) return false;
+  const unleet = core.replace(/[@40135$79!]/g, (c) => LEET[c] ?? c);
+  // Repeats like "passwordpassword" are no stronger than the word itself, so
+  // also test the smallest repeating unit.
+  const unit = (v: string) => v.replace(/^(.+?)\1+$/, "$1");
+  const variants = [core, unleet, unleet.replace(/[^a-z]/g, "")];
+  return variants.some((v) => COMMON_SET.has(v) || COMMON_SET.has(unit(v)));
+}
+
+// Who the password belongs to, for the "must not contain" rules. Both sides
+// pass it: the register form has the typed values, the server has the row.
+export interface PasswordContext {
+  username?: string | null;
+  email?: string | null;
+}
+
+export type PasswordRuleId = "length" | "upper" | "lower" | "digit" | "symbol" | "max" | "personal" | "common";
+
+export interface PasswordRuleCheck {
+  id: PasswordRuleId;
+  // Checklist wording (what to do).
+  label: string;
+  // Error wording (what is wrong), used in field errors and the API's 400.
+  message: string;
+  passed: boolean;
+}
+
+// Personal fragments that must not appear in the password. Shorter than 3
+// characters is skipped: banning "jo" would reject half the dictionary.
+function personalParts(ctx: PasswordContext): string[] {
+  const parts: string[] = [];
+  const username = ctx.username?.trim().toLowerCase();
+  if (username) parts.push(username);
+  const email = ctx.email?.trim().toLowerCase();
+  if (email && email.includes("@")) {
+    // "first.last+tag@x" -> "first.last"; the +tag is noise, not identity.
+    parts.push(email.slice(0, email.indexOf("@")).split("+")[0]);
+  }
+  return parts.filter((p) => p.length >= 3);
+}
+
+// Every rule with pass/fail, in checklist order. The UI renders this list
+// live; validatePassword and the zod schema read the same list, so the
+// checklist can never show green for something the server rejects.
+export function passwordChecks(pw: string, ctx: PasswordContext = {}): PasswordRuleCheck[] {
+  const lower = pw.toLowerCase();
+  const personal = personalParts(ctx);
+  return [
+    { id: "length", label: `At least ${PASSWORD_MIN} characters`, message: `Password must be at least ${PASSWORD_MIN} characters.`, passed: pw.length >= PASSWORD_MIN },
+    { id: "upper", label: "An uppercase letter (A-Z)", message: "Password must contain an uppercase letter.", passed: /[A-Z]/.test(pw) },
+    { id: "lower", label: "A lowercase letter (a-z)", message: "Password must contain a lowercase letter.", passed: /[a-z]/.test(pw) },
+    { id: "digit", label: "A number (0-9)", message: "Password must contain a number.", passed: /[0-9]/.test(pw) },
+    { id: "symbol", label: "A symbol (e.g. ! @ # - _)", message: "Password must contain a symbol such as ! @ # - or _.", passed: /[^A-Za-z0-9]/.test(pw) },
+    { id: "max", label: `At most ${PASSWORD_MAX} characters`, message: `Password must be at most ${PASSWORD_MAX} characters.`, passed: pw.length <= PASSWORD_MAX },
+    {
+      id: "personal",
+      label: "Does not contain your username or email name",
+      message: "Password must not contain your username or the name part of your email.",
+      passed: !personal.some((p) => lower.includes(p)),
+    },
+    { id: "common", label: "Not a common password", message: "That password is too common. Choose something less predictable.", passed: !!pw && !isCommonPassword(pw) },
+  ];
+}
+
+// Every failing rule's message (empty = valid). The server returns all of them
+// so the form can show each broken rule at once.
+export function passwordErrors(pw: string, ctx: PasswordContext = {}): string[] {
+  if (!pw) return ["Password is required."];
+  return passwordChecks(pw, ctx)
+    .filter((c) => !c.passed)
+    .map((c) => c.message);
+}
+
+export function validatePassword(pw: string, ctx: PasswordContext = {}): ValidationResult {
+  return passwordErrors(pw, ctx)[0] ?? null;
 }
 
 export type PasswordStrength = "weak" | "fair" | "good" | "strong";
 
-// Heuristic strength hint for the register form. Purely advisory: the hard
-// rule is validatePassword. Scores length and character-class variety.
-export function passwordStrength(pw: string): PasswordStrength {
-  if (validatePassword(pw)) return "weak";
+// Strength meter. Anything that breaks a rule is "weak" (and cannot be
+// submitted); above that, extra length and a 4th character class score up.
+export function passwordStrength(pw: string, ctx: PasswordContext = {}): PasswordStrength {
+  if (validatePassword(pw, ctx)) return "weak";
   let score = 0;
-  if (pw.length >= 12) score++;
-  if (pw.length >= 16) score++;
-  if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) score++;
-  if (/[^A-Za-z0-9]/.test(pw)) score++;
-  if (score >= 3) return "strong";
-  if (score === 2) return "good";
+  if (pw.length >= 14) score++;
+  if (pw.length >= 18) score++;
+  // Two or more symbols, or symbols not at the end, beat the "Word123!" habit.
+  if ((pw.match(/[^A-Za-z0-9]/g) ?? []).length >= 2 || /[^A-Za-z0-9][A-Za-z0-9]/.test(pw)) score++;
+  if (score >= 2) return "strong";
+  if (score === 1) return "good";
   return "fair";
+}
+
+// ---------- Username ----------
+
+export const USERNAME_MIN = 3;
+export const USERNAME_MAX = 20;
+export const USERNAME_RULE = `${USERNAME_MIN}-${USERNAME_MAX} characters: lowercase letters, numbers and underscores, starting with a letter.`;
+
+// Names that would impersonate the system or collide with routes. Kept in
+// sync with the backfill migration (20261101090000_user_username), which a
+// test checks, so a backfilled user can never land on one of these.
+export const RESERVED_USERNAMES: readonly string[] = [
+  "admin", "administrator", "root", "system", "sysadmin", "superuser", "api", "support", "help",
+  "staff", "moderator", "mod", "owner", "security", "schediq", "official", "null", "undefined",
+  "anonymous", "guest", "user", "users", "account", "login", "logout", "register", "signup",
+  "settings", "dashboard", "reports", "me", "test", "www", "mail", "noreply", "postmaster",
+];
+
+// Applied before validating AND before storing, so "  Tristan " and "tristan"
+// are the same account name.
+export function normalizeUsername(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+// Every failing rule for an already-normalised username (empty = valid).
+export function usernameErrors(raw: string): string[] {
+  const u = normalizeUsername(raw);
+  if (!u) return ["Username is required."];
+  const out: string[] = [];
+  if (u.length < USERNAME_MIN) out.push(`Username must be at least ${USERNAME_MIN} characters.`);
+  if (u.length > USERNAME_MAX) out.push(`Username must be at most ${USERNAME_MAX} characters.`);
+  if (/\s/.test(u)) out.push("Username cannot contain spaces.");
+  if (!/^[a-z]/.test(u)) out.push("Username must start with a letter.");
+  if (/[^a-z0-9_\s]/.test(u)) out.push("Username can only use lowercase letters, numbers and underscores.");
+  if (RESERVED_USERNAMES.includes(u)) out.push("That username is reserved. Choose another.");
+  return out;
+}
+
+export function validateUsername(raw: string): ValidationResult {
+  return usernameErrors(raw)[0] ?? null;
 }
 
 // ---------- Text fields ----------

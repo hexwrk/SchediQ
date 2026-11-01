@@ -1,7 +1,9 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { gunzip, gzip } from "zlib";
 import { z } from "zod";
 import { env } from "./env";
+import { uploadToDrive } from "./googleDrive";
 import { prisma } from "./prisma";
 
 // System backup / restore for the super-admin System page.
@@ -18,6 +20,8 @@ import { prisma } from "./prisma";
 // the command line, because argv is world-readable via `ps` / /proc/<pid>/cmdline.
 
 const execFileAsync = promisify(execFile);
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
 
 // Dumps are buffered in memory so a pg_dump failure can still fall back to JSON
 // before any bytes are sent. 256 MB is far above a student-scale database.
@@ -221,6 +225,61 @@ export async function createBackup(now = new Date()): Promise<BackupFile> {
   };
 }
 
+// ---------- Off-site: Google Drive ----------
+
+export interface DriveBackupResult {
+  format: BackupFormat;
+  filename: string;
+  sizeBytes: number;
+  rawBytes: number;
+  driveFileId: string;
+  driveLink: string;
+  fallbackReason?: string;
+  createdAt: Date;
+}
+
+// Full-system dump (same pg_dump / JSON-fallback path as the local download),
+// gzipped, uploaded to Drive and logged. Used by the admin button and the
+// optional schedule. Deliberately NOT gated by DEMO_MODE like the local
+// download: production is exactly where an off-site copy matters, and the
+// file only ever goes to the admin's own Drive, never to a browser.
+export async function createDriveBackup(actorEmail: string, now = new Date()): Promise<DriveBackupResult> {
+  const backup = await createBackup(now);
+  // SQL dumps compress ~5-10x; level 9 costs little at this size.
+  const gz = await gzipAsync(backup.data, { level: 9 });
+  const filename = `${backup.filename}.gz`;
+  const upload = await uploadToDrive({
+    name: filename,
+    mimeType: "application/gzip",
+    data: gz,
+    description: `SchediQ full-system backup (${backup.format === "sql" ? "pg_dump SQL" : "JSON export"}), created ${now.toISOString()} by ${actorEmail}.`,
+  });
+  // Logged AFTER the dump (like the local backup), so the upload's own log row
+  // is not inside the file.
+  const log = await prisma.backupLog.create({
+    data: {
+      kind: "BACKUP",
+      format: backup.format,
+      filename,
+      sizeBytes: gz.length,
+      actorEmail,
+      destination: "drive",
+      driveFileId: upload.id,
+      driveLink: upload.webViewLink,
+    },
+  });
+  return {
+    format: backup.format,
+    filename,
+    sizeBytes: gz.length,
+    rawBytes: backup.data.length,
+    driveFileId: upload.id,
+    driveLink: upload.webViewLink,
+    fallbackReason: backup.fallbackReason,
+    createdAt: log.createdAt,
+  };
+}
+
 // ---------- Restore (DESTRUCTIVE) ----------
 
 export class RestoreError extends Error {}
@@ -314,7 +373,17 @@ async function restoreJson(data: Buffer): Promise<void> {
 // Replace the ENTIRE database with the uploaded backup. Admin-only and
 // irreversible: every user, task and session not in the file is gone.
 export async function restoreBackup(filename: string, data: Buffer): Promise<BackupFormat> {
-  const lower = filename.toLowerCase();
+  let lower = filename.toLowerCase();
+  // A .sql.gz / .json.gz downloaded from the Drive backup folder. The output
+  // cap stops a small "zip bomb" upload from inflating to gigabytes in memory.
+  if (lower.endsWith(".gz")) {
+    try {
+      data = await gunzipAsync(data, { maxOutputLength: MAX_DUMP_BYTES });
+    } catch {
+      throw new RestoreError("This .gz file could not be decompressed (corrupt, or larger than 256 MB unpacked).");
+    }
+    lower = lower.slice(0, -3);
+  }
   if (lower.endsWith(".sql")) {
     await restoreSql(data);
     return "sql";
@@ -323,5 +392,5 @@ export async function restoreBackup(filename: string, data: Buffer): Promise<Bac
     await restoreJson(data);
     return "json";
   }
-  throw new RestoreError("Upload a .sql or .json SchediQ backup file.");
+  throw new RestoreError("Upload a .sql, .json, .sql.gz or .json.gz SchediQ backup file.");
 }

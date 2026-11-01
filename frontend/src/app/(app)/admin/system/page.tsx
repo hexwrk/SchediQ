@@ -2,7 +2,7 @@
 
 import { FormEvent, useRef, useState } from "react";
 import { AccessDenied } from "@/lib/access-denied";
-import { adminApi } from "@/lib/api";
+import { DriveBackupResult, adminApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { FieldError, inputClass } from "@/lib/form";
 import { DatabaseIcon } from "@/lib/icons";
@@ -20,6 +20,8 @@ import { errorMessage, useApi } from "@/lib/use-api";
 // by Neon: the buttons are disabled and the reason is shown instead of an error.
 
 const MAX_UPLOAD_MB = 50;
+// Setup guide for the off-site Drive backup (env vars, OAuth Playground steps).
+const DRIVE_SETUP_URL = "https://github.com/hexwrk/SchediQ/blob/develop/docs/GOOGLE_DRIVE_BACKUP.md";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -33,6 +35,9 @@ export default function SystemPage() {
   const [error, setError] = useState<string | null>(null);
   const [backingUp, setBackingUp] = useState(false);
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
+  const [driveBusy, setDriveBusy] = useState(false);
+  const [driveResult, setDriveResult] = useState<DriveBackupResult | null>(null);
+  const [driveError, setDriveError] = useState<string | null>(null);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -72,6 +77,23 @@ export default function SystemPage() {
     }
   }
 
+  // Off-site backup: the server dumps, gzips and uploads to Google Drive; the
+  // browser only receives the link.
+  async function driveBackup() {
+    if (!token) return;
+    setDriveBusy(true);
+    setDriveError(null);
+    setDriveResult(null);
+    try {
+      setDriveResult(await adminApi.driveBackup(token));
+      await load();
+    } catch (err) {
+      setDriveError(errorMessage(err, "Google Drive backup failed"));
+    } finally {
+      setDriveBusy(false);
+    }
+  }
+
   async function restore(e: FormEvent) {
     e.preventDefault();
     if (!token) return;
@@ -79,7 +101,7 @@ export default function SystemPage() {
     setRestoreError(null);
     const errs: { file?: string; confirm?: string } = {};
     if (!file) errs.file = "Choose a .sql or .json backup file.";
-    else if (!/\.(sql|json)$/i.test(file.name)) errs.file = "Only .sql or .json SchediQ backups can be restored.";
+    else if (!/\.(sql|json)(\.gz)?$/i.test(file.name)) errs.file = "Only .sql, .json, .sql.gz or .json.gz SchediQ backups can be restored.";
     else if (file.size === 0) errs.file = "That file is empty.";
     else if (file.size > MAX_UPLOAD_MB * 1024 * 1024) errs.file = `Backups larger than ${MAX_UPLOAD_MB} MB are not accepted.`;
     if (confirm !== "RESTORE") errs.confirm = "Type RESTORE (in capitals) to confirm.";
@@ -127,6 +149,70 @@ export default function SystemPage() {
         </div>
       )}
 
+      <section className="flex flex-col gap-3 rounded-card border border-border bg-surface p-5">
+        <div className="flex items-center gap-2">
+          <DatabaseIcon width={18} height={18} className="text-primary" />
+          <h2 className="text-sm font-semibold">Off-site backup: Google Drive</h2>
+        </div>
+        <p className="text-sm text-text-muted">
+          Uploads a gzipped full-system dump (every table; pg_dump, or the JSON export where pg_dump is not
+          installed) to the administrator&rsquo;s Google Drive, so a copy exists off this server. The app can only
+          see files it created in that Drive (drive.file scope).
+          {stats.drive.scheduled && " Automatic scheduled backups are on."}
+        </p>
+        {stats.drive.configured ? (
+          <>
+            <p className="text-sm">
+              Last Drive backup:{" "}
+              <span className="font-medium">
+                {stats.drive.lastBackup
+                  ? `${new Date(stats.drive.lastBackup.createdAt).toLocaleString()} (${stats.drive.lastBackup.filename}, ${formatBytes(stats.drive.lastBackup.sizeBytes)}, by ${stats.drive.lastBackup.actorEmail})`
+                  : "never"}
+              </span>
+              {stats.drive.lastBackup?.driveLink && (
+                <>
+                  {" "}
+                  <a href={stats.drive.lastBackup.driveLink} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                    Open in Drive
+                  </a>
+                </>
+              )}
+            </p>
+            <div>
+              <button
+                onClick={driveBackup}
+                disabled={driveBusy}
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
+              >
+                {driveBusy ? "Uploading to Google Drive..." : "Back up to Google Drive"}
+              </button>
+            </div>
+            {driveResult && (
+              <p role="status" className="text-sm text-accent">
+                Uploaded {driveResult.filename} ({formatBytes(driveResult.sizeBytes)} gzipped from{" "}
+                {formatBytes(driveResult.rawBytes)}, {driveResult.format === "sql" ? "pg_dump SQL" : "JSON export"})
+                {driveResult.fallbackReason ? `. JSON fallback used: ${driveResult.fallbackReason}` : ""}.{" "}
+                <a href={driveResult.driveLink} target="_blank" rel="noopener noreferrer" className="font-medium text-primary underline">
+                  Open in Google Drive
+                </a>
+              </p>
+            )}
+            {driveError && <p className="text-sm text-red-600">{driveError}</p>}
+          </>
+        ) : (
+          <div role="status" className="flex flex-col gap-2 rounded-lg border border-amber/40 bg-amber/5 px-4 py-3 text-sm">
+            <p className="font-medium">Configure Google Drive backup</p>
+            <p className="text-text-muted">
+              Google Drive is not set up on the API server yet. Set GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and
+              GOOGLE_DRIVE_REFRESH_TOKEN, then restart the API.
+            </p>
+            <a href={DRIVE_SETUP_URL} target="_blank" rel="noopener noreferrer" className="font-medium text-primary hover:underline">
+              Open the setup guide
+            </a>
+          </div>
+        )}
+      </section>
+
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="flex flex-col gap-3 rounded-card border border-border bg-surface p-5">
           <div className="flex items-center gap-2">
@@ -171,11 +257,11 @@ export default function SystemPage() {
             changes nothing.
           </p>
           <label className="flex flex-col gap-1 text-sm">
-            Backup file (.sql or .json)
+            Backup file (.sql, .json, or .gz from Drive)
             <input
               ref={fileRef}
               type="file"
-              accept=".sql,.json"
+              accept=".sql,.json,.gz"
               disabled={backupOff}
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               className="text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-bg file:px-3 file:py-1.5 file:text-sm"

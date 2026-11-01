@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import {
   createBackupHandler,
+  createDriveBackupHandler,
   deleteUser,
   getDataModel,
   getStats,
@@ -16,13 +17,13 @@ import {
 const router = Router();
 
 // Restore uploads are held in memory (never written to disk) and capped: one
-// file, 50 MB, .sql or .json only. Anything else is rejected before the
+// file, 50 MB, .sql or .json (optionally .gz, as stored in Drive) only. Anything else is rejected before the
 // controller runs.
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024, files: 1, fields: 5 },
   fileFilter: (_req, file, cb) => {
-    cb(null, /\.(sql|json)$/i.test(file.originalname));
+    cb(null, /\.(sql|json)(\.gz)?$/i.test(file.originalname));
   },
 });
 
@@ -33,6 +34,7 @@ router.post("/users/:id/reset-password", resetUserPassword);
 router.get("/stats", getStats);
 router.get("/data-model", getDataModel);
 router.post("/backup", createBackupHandler);
+router.post("/backup/drive", createDriveBackupHandler);
 router.post("/restore", upload.single("file"), restoreHandler);
 
 export default router;

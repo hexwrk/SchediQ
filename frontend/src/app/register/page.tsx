@@ -2,34 +2,41 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import {
   EMAIL_RULE,
-  PASSWORD_RULE,
-  passwordStrength,
+  USERNAME_MAX,
+  USERNAME_RULE,
+  normalizeUsername,
+  passwordErrors,
+  usernameErrors,
   validateEmail,
   validateName,
-  validatePassword,
+  validateUsername,
 } from "@shared/validation";
-import { ApiError } from "@/lib/api";
+import { ApiError, authApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { FieldError, FieldErrors, collectErrors, hasErrors, inputClass, serverFieldErrors } from "@/lib/form";
+import { PasswordChecklist, passwordReady } from "@/lib/password";
+import { useDebounced } from "@/lib/search";
 
-type Field = "name" | "email" | "password";
-const FIELDS: Field[] = ["name", "email", "password"];
+type Field = "name" | "email" | "username" | "password";
+const FIELDS: Field[] = ["name", "email", "username", "password"];
 
-const STRENGTH = {
-  weak: { label: "Weak", color: "var(--color-red-600)", width: "25%" },
-  fair: { label: "Fair", color: "var(--amber)", width: "50%" },
-  good: { label: "Good", color: "var(--primary)", width: "75%" },
-  strong: { label: "Strong", color: "var(--accent)", width: "100%" },
-} as const;
+// Result of the last availability lookup, keyed by the name it was for, so a
+// stale answer for "tris" is never shown while the box says "tristan".
+interface Availability {
+  username: string;
+  available: boolean;
+  reasons: string[];
+}
 
 export default function RegisterPage() {
   const { register } = useAuth();
   const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<FieldErrors<Field>>({});
   // Fields the user has left at least once: errors show on blur, not on the
@@ -37,19 +44,46 @@ export default function RegisterPage() {
   const [touched, setTouched] = useState<Partial<Record<Field, boolean>>>({});
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [availability, setAvailability] = useState<Availability | null>(null);
 
-  function validate(values = { name, email, password }) {
+  const normalized = normalizeUsername(username);
+  const formatProblems = usernameErrors(username);
+  const debouncedUsername = useDebounced(normalized, 400);
+
+  // Availability is only asked for a name that already passes the format
+  // rules (those are checked locally). State is only set in the promise
+  // callback, never synchronously in the effect body.
+  useEffect(() => {
+    if (!debouncedUsername || usernameErrors(debouncedUsername).length > 0) return;
+    const ctrl = new AbortController();
+    authApi.usernameAvailable(debouncedUsername, ctrl.signal).then(
+      (r) => setAvailability(r),
+      // Network/rate-limit failure: leave it unknown; the server re-checks on submit.
+      () => undefined
+    );
+    return () => ctrl.abort();
+  }, [debouncedUsername]);
+
+  const checked = availability && availability.username === normalized ? availability : null;
+  const usernameStatus: "idle" | "checking" | "available" | "taken" =
+    !normalized || formatProblems.length > 0 ? "idle" : !checked ? "checking" : checked.available ? "available" : "taken";
+
+  const ctx = { username: normalized, email };
+
+  function validate(values = { name, email, username, password }) {
     return collectErrors<Field>({
       name: validateName(values.name),
       email: validateEmail(values.email),
-      password: validatePassword(values.password),
+      username: validateUsername(values.username),
+      password: passwordErrors(values.password, { username: normalizeUsername(values.username), email: values.email })[0] ?? null,
     });
   }
 
   function update(field: Field, value: string) {
-    const next = { name, email, password, [field]: value };
+    const next = { name, email, username, password, [field]: value };
     if (field === "name") setName(value);
     if (field === "email") setEmail(value);
+    if (field === "username") setUsername(value);
     if (field === "password") setPassword(value);
     if (touched[field]) setErrors((e) => ({ ...e, [field]: validate(next)[field] }));
   }
@@ -64,13 +98,14 @@ export default function RegisterPage() {
     setError(null);
     // Block submit on any invalid field; the server re-checks the same rules.
     const found = validate();
-    setTouched({ name: true, email: true, password: true });
+    if (!found.username && usernameStatus === "taken") found.username = "That username is already taken.";
+    setTouched({ name: true, email: true, username: true, password: true });
     setErrors(found);
     if (hasErrors(found)) return;
 
     setSubmitting(true);
     try {
-      await register(email.trim(), password, name.trim());
+      await register(email.trim(), normalized, password, name.trim());
       router.push("/dashboard");
     } catch (err) {
       const fromServer = serverFieldErrors(err, FIELDS);
@@ -83,10 +118,16 @@ export default function RegisterPage() {
     }
   }
 
-  const strength = password ? STRENGTH[passwordStrength(password)] : null;
+  const canSubmit =
+    !submitting &&
+    passwordReady(password, ctx) &&
+    formatProblems.length === 0 &&
+    usernameStatus !== "taken" &&
+    !validateName(name) &&
+    !validateEmail(email);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-bg px-6">
+    <div className="flex min-h-screen items-center justify-center bg-bg px-6 py-8">
       <form
         onSubmit={onSubmit}
         noValidate
@@ -114,6 +155,41 @@ export default function RegisterPage() {
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
+          Username
+          <input
+            type="text"
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            value={username}
+            maxLength={USERNAME_MAX + 10}
+            onChange={(e) => update("username", e.target.value)}
+            onBlur={() => blur("username")}
+            aria-invalid={!!errors.username || usernameStatus === "taken"}
+            aria-describedby="username-status"
+            className={inputClass(errors.username || (usernameStatus === "taken" ? "taken" : null))}
+          />
+          <span id="username-status" className="flex flex-col gap-0.5 text-xs" aria-live="polite">
+            {username && formatProblems.length > 0 ? (
+              formatProblems.map((p) => (
+                <span key={p} className="text-red-600">
+                  {p}
+                </span>
+              ))
+            ) : usernameStatus === "checking" ? (
+              <span className="text-text-muted">Checking availability of {normalized}...</span>
+            ) : usernameStatus === "available" ? (
+              <span className="text-accent">{normalized} is available.</span>
+            ) : usernameStatus === "taken" ? (
+              <span className="text-red-600">{checked?.reasons[0] ?? "That username is already taken."}</span>
+            ) : errors.username ? null : (
+              <span className="text-text-muted">{USERNAME_RULE}</span>
+            )}
+          </span>
+          {errors.username && !formatProblems.includes(errors.username) && <FieldError message={errors.username} />}
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
           Email
           <input
             type="email"
@@ -129,6 +205,7 @@ export default function RegisterPage() {
           ) : (
             <span className="text-xs text-text-muted">{EMAIL_RULE}</span>
           )}
+          <span className="text-xs text-text-muted">You log in with your email.</span>
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
@@ -140,31 +217,18 @@ export default function RegisterPage() {
             onChange={(e) => update("password", e.target.value)}
             onBlur={() => blur("password")}
             aria-invalid={!!errors.password}
+            aria-describedby="password-rules"
             className={inputClass(errors.password)}
           />
-          {strength && (
-            <span className="flex items-center gap-2 text-xs text-text-muted">
-              <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-bg">
-                <span
-                  className="block h-full rounded-full transition-all"
-                  style={{ width: strength.width, background: strength.color }}
-                />
-              </span>
-              <span style={{ color: strength.color }}>{strength.label}</span>
-            </span>
-          )}
-          {errors.password ? (
-            <FieldError message={errors.password} />
-          ) : (
-            <span className="text-xs text-text-muted">{PASSWORD_RULE}</span>
-          )}
+          <PasswordChecklist id="password-rules" password={password} context={ctx} />
+          <FieldError message={errors.password} />
         </label>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
 
         <button
           type="submit"
-          disabled={submitting}
+          disabled={!canSubmit}
           className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
         >
           {submitting ? "Creating account..." : "Sign up"}

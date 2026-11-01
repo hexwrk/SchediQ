@@ -1,10 +1,13 @@
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { Request, Response } from "express";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { validatePassword } from "../../../shared/validation";
 import { prisma } from "../lib/prisma";
-import { RestoreError, backupStatus, createBackup, restoreBackup } from "../lib/backup";
+import { RestoreError, backupStatus, createBackup, createDriveBackup, restoreBackup } from "../lib/backup";
+import { driveConfigured, env } from "../lib/env";
+import { DriveError, DriveNotConfiguredError } from "../lib/googleDrive";
 import { BCRYPT_ROUNDS } from "./auth.controller";
 
 // Super-admin module. Every route here is mounted behind requireAuth AND
@@ -34,15 +37,36 @@ async function sessionCountsByUser(): Promise<Map<string, number>> {
   return new Map(rows.map((r) => [r.userId, Number(r.count)]));
 }
 
-// GET /api/admin/users
-export async function listUsers(_req: Request, res: Response) {
-  const [users, sessionCounts] = await Promise.all([
+const listQuery = z.object({
+  // Free-text search across name, email and username. Capped so a pasted blob
+  // cannot become an expensive ILIKE.
+  q: z.string().trim().max(100, "Search must be at most 100 characters.").optional(),
+});
+
+// GET /api/admin/users?q=...
+// Searched in the database (not in the browser) because the user list grows
+// with every sign-up. Prisma sends q as a bind parameter inside ILIKE, so it
+// cannot inject SQL; % and _ typed by the admin act as wildcards, harmless here.
+export async function listUsers(req: Request, res: Response) {
+  const { q } = listQuery.parse(req.query);
+  const where: Prisma.UserWhereInput | undefined = q
+    ? {
+        OR: [
+          { name: { contains: q, mode: "insensitive" } },
+          { email: { contains: q, mode: "insensitive" } },
+          { username: { contains: q, mode: "insensitive" } },
+        ],
+      }
+    : undefined;
+  const [users, total, sessionCounts] = await Promise.all([
     prisma.user.findMany({
+      where,
       orderBy: [{ role: "desc" }, { createdAt: "asc" }],
       // Explicit select: passwordHash is never returned, even to an admin.
       select: {
         id: true,
         email: true,
+        username: true,
         name: true,
         role: true,
         accountType: true,
@@ -51,9 +75,12 @@ export async function listUsers(_req: Request, res: Response) {
         _count: { select: { tasks: true, subjects: true } },
       },
     }),
+    prisma.user.count(),
     sessionCountsByUser(),
   ]);
   return res.json({
+    total,
+    query: q ?? "",
     users: users.map(({ _count, ...u }) => ({
       ...u,
       taskCount: _count.tasks,
@@ -82,7 +109,7 @@ export async function updateUser(req: Request, res: Response) {
   const user = await prisma.user.update({
     where: { id },
     data,
-    select: { id: true, email: true, name: true, role: true, accountType: true },
+    select: { id: true, email: true, username: true, name: true, role: true, accountType: true },
   });
   return res.json({ user });
 }
@@ -110,15 +137,16 @@ export async function deleteUser(req: Request, res: Response) {
 // user is then asked to choose their own (mustChangePassword). All of the
 // user's existing sessions are revoked (tokenVersion).
 
-// No look-alike characters (0/O, 1/l/I) so it can be read out or retyped.
-const TEMP_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+// No look-alike characters (0/O/o, 1/l/I) so it can be read out or retyped.
+// Mixed case + digits, and the "-" separators supply the required symbol.
+const TEMP_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const TEMP_GROUPS = 4;
 const TEMP_GROUP_LEN = 4;
 
-// crypto.randomInt is a CSPRNG with no modulo bias. 16 chars from 31 symbols is
-// ~79 bits: far beyond online guessing, and the password is short-lived anyway.
-// Regenerated until it meets the shared password rule (needs a letter and a
-// digit), which almost every draw already does.
+// crypto.randomInt is a CSPRNG with no modulo bias. 16 chars from 55 symbols is
+// ~92 bits: far beyond online guessing, and the password is short-lived anyway.
+// Regenerated until it meets the shared password rules (upper, lower, digit;
+// the 19-char length and "-" symbol are structural), which ~90% of draws do.
 export function temporaryPassword(): string {
   for (;;) {
     const groups = Array.from({ length: TEMP_GROUPS }, () =>
@@ -174,10 +202,14 @@ export async function getStats(_req: Request, res: Response) {
       prisma.user.groupBy({ by: ["role"], _count: { _all: true } }),
       prisma.user.groupBy({ by: ["accountType"], _count: { _all: true } }),
       prisma.$queryRaw<{ bytes: bigint }[]>`SELECT pg_database_size(current_database()) AS bytes`,
-      prisma.backupLog.findFirst({ where: { kind: "BACKUP" }, orderBy: { createdAt: "desc" } }),
+      prisma.backupLog.findFirst({ where: { kind: "BACKUP", destination: "local" }, orderBy: { createdAt: "desc" } }),
       prisma.backupLog.findFirst({ where: { kind: "RESTORE" }, orderBy: { createdAt: "desc" } }),
       backupStatus(),
     ]);
+  const lastDriveBackup = await prisma.backupLog.findFirst({
+    where: { kind: "BACKUP", destination: "drive" },
+    orderBy: { createdAt: "desc" },
+  });
 
   return res.json({
     counts: { users, tasks, sessions, completedSessions, subjects },
@@ -188,6 +220,8 @@ export async function getStats(_req: Request, res: Response) {
     lastBackup,
     lastRestore,
     backup,
+    // Booleans only: whether Drive is set up, never any of its values.
+    drive: { configured: driveConfigured(), scheduled: driveConfigured() && !!env().BACKUP_SCHEDULE, lastBackup: lastDriveBackup },
     generatedAt: new Date().toISOString(),
   });
 }
@@ -226,6 +260,32 @@ export async function createBackupHandler(req: Request, res: Response) {
   // Backups contain password hashes: never let a proxy or browser cache them.
   res.setHeader("Cache-Control", "no-store");
   return res.send(backup.data);
+}
+
+// POST /api/admin/backup/drive
+// Off-site backup: full dump, gzipped, uploaded to the admin's Google Drive.
+// Responds with the Drive link (the file itself never goes to the browser).
+export async function createDriveBackupHandler(req: Request, res: Response) {
+  if (!driveConfigured()) {
+    return res.status(409).json({
+      error: "Google Drive backup is not configured on the server. Set the GOOGLE_DRIVE_* variables (see docs/GOOGLE_DRIVE_BACKUP.md).",
+      code: "DRIVE_NOT_CONFIGURED",
+    });
+  }
+  try {
+    const result = await createDriveBackup(await actorEmail(req.userId));
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(201).json(result);
+  } catch (err) {
+    if (err instanceof DriveNotConfiguredError) {
+      return res.status(409).json({ error: err.message, code: "DRIVE_NOT_CONFIGURED" });
+    }
+    // 502: the dump worked, the upstream (Google) did not.
+    if (err instanceof DriveError) {
+      return res.status(502).json({ error: err.message, code: "DRIVE_UPLOAD_FAILED" });
+    }
+    throw err;
+  }
 }
 
 // POST /api/admin/restore  (multipart, field "file")

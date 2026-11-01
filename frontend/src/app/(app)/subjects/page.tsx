@@ -6,6 +6,7 @@ import { ApiError, CognitiveCategory, Subject, subjectsApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { FieldError, inputClass, serverFieldErrors } from "@/lib/form";
 import { PlusIcon } from "@/lib/icons";
+import { SearchBox, matchesQuery, useDebounced } from "@/lib/search";
 import { EmptyState, ErrorState, LoadingState } from "@/lib/states";
 import { errorMessage, useApi } from "@/lib/use-api";
 
@@ -30,6 +31,9 @@ export default function SubjectsPage() {
   const [form, setForm] = useState(emptyForm);
   const [nameError, setNameError] = useState<string | null>(null);
   const subjects = data ?? [];
+  const [search, setSearch] = useState("");
+  const query = useDebounced(search);
+  const shown = subjects.filter((s) => matchesQuery(query, s.name, s.cognitiveCategory));
 
   function reset() {
     setForm(emptyForm);
@@ -91,17 +95,34 @@ export default function SubjectsPage() {
     <div className="grid max-w-4xl gap-6 lg:grid-cols-[1fr_320px]">
       <div className="flex flex-col gap-2">
         {actionError && <ErrorState title="That didn't work" message={actionError} />}
+        {subjects.length > 0 && (
+          <SearchBox
+            value={search}
+            onChange={setSearch}
+            placeholder="Search subjects"
+            label="Search subjects"
+            shown={shown.length}
+            total={subjects.length}
+          />
+        )}
         {loading ? (
           <LoadingState label="Loading subjects" />
         ) : error && !data ? (
           <ErrorState message={error} onRetry={reload} retrying={reloading} />
+        ) : subjects.length > 0 && shown.length === 0 ? (
+          <EmptyState
+            title="No matching subjects"
+            body={`Nothing matches "${query}".`}
+            onAction={() => setSearch("")}
+            actionLabel="Clear search"
+          />
         ) : subjects.length === 0 ? (
           <EmptyState
             title="No subjects yet"
             body="Subjects group your tasks and courses, and each one gets a mastery score. Start with the modules you are studying this semester using the form."
           />
         ) : (
-          subjects.map((s) => (
+          shown.map((s) => (
             <div
               key={s.id}
               className="flex items-center justify-between gap-3 rounded-card border border-border bg-surface px-4 py-3"

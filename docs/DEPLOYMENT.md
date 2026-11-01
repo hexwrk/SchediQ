@@ -104,6 +104,11 @@ every problem, with no secrets printed.
 | `DEMO_MODE` | `false` |
 | `CORS_ORIGIN` | `http://localhost:3000` for now (replaced in step 4) |
 | `APP_URL` | optional; defaults to the first `CORS_ORIGIN` (used in reset links) |
+| `GOOGLE_DRIVE_CLIENT_ID` | optional; off-site backup to Google Drive (`docs/GOOGLE_DRIVE_BACKUP.md`) |
+| `GOOGLE_DRIVE_CLIENT_SECRET` | optional; secret, set in Render only |
+| `GOOGLE_DRIVE_REFRESH_TOKEN` | optional; secret, set in Render only |
+| `GOOGLE_DRIVE_FOLDER_ID` | optional; a folder the app created, otherwise it uses "SchediQ Backups" |
+| `BACKUP_SCHEDULE` | optional; `daily` or a cron expression (needs the three Drive vars) |
 
 Leave `PORT` unset. Render injects it, and the API listens on it.
 
@@ -125,7 +130,7 @@ curl https://schediq-api.onrender.com/api/health/db   # {"status":"ok","latencyM
 cd backend
 NODE_ENV=production \
 DATABASE_URL='<neon direct url>' DIRECT_URL='<neon direct url>' \
-SEED_ADMIN_PASSWORD='<strong password: 8+ chars, a letter and a number>' \
+SEED_ADMIN_PASSWORD='<12+ chars, upper, lower, number, symbol, not containing "admin">' \
 npx prisma db seed
 ```
 

@@ -1,6 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { EnvError, parseEnv } from "../src/lib/env";
+import { EnvError, driveConfigured, parseEnv } from "../src/lib/env";
+import { DAILY_CRON, scheduleExpression } from "../src/lib/backupSchedule";
+import { driveErrorMessage, logDriveFailure } from "../src/lib/googleDrive";
 import { logAiFailure } from "../src/lib/openai";
 import { temporaryPassword } from "../src/controllers/admin.controller";
 import { validatePassword } from "../../shared/validation";
@@ -98,9 +100,54 @@ describe("admin temporary password", () => {
     for (let i = 0; i < 200; i++) {
       const pw = temporaryPassword();
       assert.equal(validatePassword(pw), null, pw);
-      assert.match(pw, /^[a-hjkmnp-z2-9]{4}(-[a-hjkmnp-z2-9]{4}){3}$/);
+      assert.match(pw, /^[a-hjkmnp-zA-HJ-NP-Z2-9]{4}(-[a-hjkmnp-zA-HJ-NP-Z2-9]{4}){3}$/);
       seen.add(pw);
     }
     assert.equal(seen.size, 200);
+  });
+});
+
+describe("Google Drive backup config", () => {
+  const drive = {
+    GOOGLE_DRIVE_CLIENT_ID: "id.apps.googleusercontent.com",
+    GOOGLE_DRIVE_CLIENT_SECRET: "GOCSPX-secretvalue",
+    GOOGLE_DRIVE_REFRESH_TOKEN: "1//refreshtokenvalue",
+  };
+  it("is configured only when all three credentials are set", () => {
+    assert.equal(driveConfigured(parseEnv(base)), false);
+    assert.equal(driveConfigured(parseEnv({ ...base, ...drive })), true);
+    for (const key of Object.keys(drive)) {
+      assert.equal(driveConfigured(parseEnv({ ...base, ...drive, [key]: "" })), false, key);
+    }
+  });
+  it("validates BACKUP_SCHEDULE as daily or a cron expression", () => {
+    assert.equal(parseEnv({ ...base, BACKUP_SCHEDULE: "daily" }).BACKUP_SCHEDULE, "daily");
+    assert.doesNotThrow(() => parseEnv({ ...base, BACKUP_SCHEDULE: "0 */6 * * *" }));
+    failsWith({ ...base, BACKUP_SCHEDULE: "every tuesday" }, /BACKUP_SCHEDULE/);
+    assert.equal(scheduleExpression("Daily"), DAILY_CRON);
+    assert.equal(scheduleExpression(" 0 1 * * * "), "0 1 * * *");
+  });
+  it("maps Google errors to actionable messages without echoing them", () => {
+    assert.match(driveErrorMessage({ response: { status: 400, data: { error: "invalid_grant" } } }), /refresh token/);
+    assert.match(driveErrorMessage({ response: { status: 401, data: { error: "invalid_client" } } }), /client ID or secret/);
+    assert.match(driveErrorMessage({ status: 403 }), /403/);
+    assert.match(driveErrorMessage({ status: 503 }), /unavailable/);
+  });
+  it("never logs tokens or secrets", () => {
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => lines.push(args.join(" "));
+    try {
+      logDriveFailure("upload", {
+        status: 401,
+        message: "bad Authorization: Bearer ya29.a0AfH6abc refresh 1//0gXYZ secret GOCSPX-abc123",
+        config: { headers: { Authorization: "Bearer ya29.a0AfH6abc" } },
+      });
+    } finally {
+      console.error = original;
+    }
+    assert.equal(lines.length, 1);
+    for (const leak of ["ya29.a0AfH6abc", "1//0gXYZ", "GOCSPX-abc123"]) assert.ok(!lines[0].includes(leak), lines[0]);
+    assert.match(lines[0], /status=401/);
   });
 });

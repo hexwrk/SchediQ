@@ -10,7 +10,7 @@ interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, name: string) => Promise<void>;
+  register: (email: string, username: string, password: string, name: string) => Promise<void>;
   logout: () => void;
   // Replace the cached user after a server-side change (e.g. tier upgrade) so
   // the badge and gated UI update without a reload.
@@ -75,8 +75,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     persist(res.token, res.user);
   }
 
-  async function register(email: string, password: string, name: string) {
-    const res = await authApi.register(email, password, name);
+  async function register(email: string, username: string, password: string, name: string) {
+    const res = await authApi.register(email, username, password, name);
     persist(res.token, res.user);
   }
 

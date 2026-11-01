@@ -1,3 +1,4 @@
+import { validate as validCron } from "node-cron";
 import { z } from "zod";
 
 // Typed, validated environment. index.ts calls loadEnv() before anything else
@@ -95,6 +96,23 @@ const schema = z.object({
   BACKUP_MODE: z.enum(["auto", "json"]).default("auto"),
   PG_DUMP_PATH: optionalString,
   PSQL_PATH: optionalString,
+  // Off-site backup to Google Drive (OAuth2, drive.file scope). All three of
+  // ID/secret/refresh token are needed; with any missing, Drive backup is
+  // simply off (see driveConfigured). The secret and refresh token are never
+  // logged or returned by the API.
+  GOOGLE_DRIVE_CLIENT_ID: optionalString,
+  GOOGLE_DRIVE_CLIENT_SECRET: optionalString,
+  GOOGLE_DRIVE_REFRESH_TOKEN: optionalString,
+  // Optional target folder. Must be one the app created (drive.file cannot
+  // see folders made in the Drive UI); otherwise the app uses its own
+  // "SchediQ Backups" folder.
+  GOOGLE_DRIVE_FOLDER_ID: optionalString,
+  // Automatic Drive backup: "daily" (03:00 server time) or a cron expression
+  // such as "0 */6 * * *". Unset = manual only.
+  BACKUP_SCHEDULE: optionalString.refine(
+    (v) => v === undefined || v.toLowerCase() === "daily" || validCron(v),
+    'must be "daily" or a valid cron expression, e.g. "0 3 * * *"'
+  ),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -142,6 +160,13 @@ export function loadEnv(): Env {
     }
     throw err;
   }
+}
+
+// True only when every credential Drive needs is present. A half-filled set
+// (e.g. no refresh token yet) is treated as "not configured", never an error,
+// so the rest of the API boots normally.
+export function driveConfigured(e: Env = env()): boolean {
+  return !!(e.GOOGLE_DRIVE_CLIENT_ID && e.GOOGLE_DRIVE_CLIENT_SECRET && e.GOOGLE_DRIVE_REFRESH_TOKEN);
 }
 
 export function appUrl(): string {

@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useState } from "react";
-import { PASSWORD_RULE, validatePassword } from "@shared/validation";
 import { authApi } from "@/lib/api";
 import { FieldError, inputClass, serverFieldErrors } from "@/lib/form";
+import { PasswordChecklist, passwordReady } from "@/lib/password";
 import { errorMessage } from "@/lib/use-api";
 
 // Step 2 of password reset: ?token=... from the link, then a new password.
@@ -50,8 +50,10 @@ function ResetForm() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    // The link only carries a token, so the page cannot know the account's
+    // username/email: that one rule is enforced by the server on submit.
     const found = {
-      password: validatePassword(password) ?? undefined,
+      password: passwordReady(password, null) ? undefined : "Meet every password requirement below.",
       confirm: password !== confirm ? "Passwords do not match." : undefined,
     };
     setErrors(found);
@@ -90,9 +92,11 @@ function ResetForm() {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           aria-invalid={!!errors.password}
+          aria-describedby="reset-password-rules"
           className={inputClass(errors.password)}
         />
-        {errors.password ? <FieldError message={errors.password} /> : <span className="text-xs text-text-muted">{PASSWORD_RULE}</span>}
+        <PasswordChecklist id="reset-password-rules" password={password} context={null} />
+        <FieldError message={errors.password} />
       </label>
       <label className="flex flex-col gap-1 text-sm">
         Confirm new password
@@ -116,7 +120,7 @@ function ResetForm() {
       )}
       <button
         type="submit"
-        disabled={saving}
+        disabled={saving || !passwordReady(password, null) || password !== confirm}
         className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
       >
         {saving ? "Saving..." : "Set new password"}

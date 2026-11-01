@@ -4,7 +4,7 @@ import { z } from "zod";
 import { tokenFor } from "../lib/jwt";
 import { prisma } from "../lib/prisma";
 import { aiUsageFor } from "../lib/tier";
-import { passwordField } from "../lib/validators";
+import { passwordFieldFor } from "../lib/validators";
 import { BCRYPT_ROUNDS, toPublicUser } from "./auth.controller";
 
 const tierSchema = z.object({
@@ -39,7 +39,9 @@ export async function updateTier(req: Request, res: Response) {
 
 const passwordSchema = z.object({
   currentPassword: z.string().min(1, "Enter your current password."),
-  newPassword: passwordField,
+  // Shape only here; the full rules need the account's username and email,
+  // so they run after the user is loaded.
+  newPassword: z.string({ message: "Enter a new password." }).max(200),
 });
 
 // POST /api/account/password  { currentPassword, newPassword }
@@ -52,6 +54,9 @@ export async function changePassword(req: Request, res: Response) {
   const { currentPassword, newPassword } = passwordSchema.parse(req.body);
   const user = await prisma.user.findUnique({ where: { id: req.userId } });
   if (!user) return res.status(404).json({ error: "User not found" });
+
+  // One message per failing rule under newPassword (ZodError -> 400).
+  z.object({ newPassword: passwordFieldFor(user) }).parse({ newPassword });
 
   if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
     return res.status(400).json({

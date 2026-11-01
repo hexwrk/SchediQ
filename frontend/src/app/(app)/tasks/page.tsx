@@ -17,6 +17,7 @@ import {
   validateTaskForm,
 } from "@/lib/form";
 import { PlusIcon } from "@/lib/icons";
+import { SearchBox, matchesQuery, useDebounced } from "@/lib/search";
 import { EmptyState, ErrorState, LoadingState } from "@/lib/states";
 import { TaskProgressLine, useXpReward } from "@/lib/ui";
 import { errorMessage, useApi } from "@/lib/use-api";
@@ -49,6 +50,9 @@ export default function TasksPage() {
     subjectId: "",
   });
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<TaskField>>({});
+  // Client-side search: a user's own task list is small and already loaded.
+  const [search, setSearch] = useState("");
+  const query = useDebounced(search);
 
   const replace = (task: Task) =>
     mutate((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === task.id ? task : t)) }));
@@ -114,8 +118,10 @@ export default function TasksPage() {
     }
   }
 
-  const tasks = data?.tasks ?? [];
+  const allTasks = data?.tasks ?? [];
   const subjects = data?.subjects ?? [];
+  // The row being edited stays visible even if the edit stops it matching.
+  const tasks = allTasks.filter((t) => t.id === editingId || matchesQuery(query, t.title, t.subject?.name, t.priority));
 
   return (
     <div className="flex max-w-3xl flex-col gap-5">
@@ -133,10 +139,28 @@ export default function TasksPage() {
 
       {actionError && <ErrorState title="That didn't work" message={actionError} />}
 
+      {allTasks.length > 0 && (
+        <SearchBox
+          value={search}
+          onChange={setSearch}
+          placeholder="Search tasks by title or subject"
+          label="Search tasks"
+          shown={tasks.length}
+          total={allTasks.length}
+        />
+      )}
+
       {loading ? (
         <LoadingState label="Loading tasks" />
       ) : error && !data ? (
         <ErrorState message={error} onRetry={reload} retrying={reloading} />
+      ) : allTasks.length > 0 && tasks.length === 0 ? (
+        <EmptyState
+          title="No matching tasks"
+          body={`Nothing matches "${query}". Try another word or clear the search.`}
+          onAction={() => setSearch("")}
+          actionLabel="Clear search"
+        />
       ) : tasks.length === 0 ? (
         <EmptyState
           title="No tasks yet"

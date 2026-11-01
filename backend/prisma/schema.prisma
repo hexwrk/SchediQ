@@ -16,6 +16,9 @@ datasource db {
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
+  // Public handle, 3-20 chars [a-z0-9_] starting with a letter, stored
+  // normalised (trimmed, lower-case). Login stays by email.
+  username     String   @unique
   passwordHash String
   name         String
   createdAt    DateTime @default(now())
@@ -89,6 +92,14 @@ model BackupLog {
   filename   String
   sizeBytes  Int
   actorEmail String
+  // "local" (downloaded to the admin's browser) | "drive" (uploaded to
+  // Google Drive). Existing rows are local.
+  destination String  @default("local")
+  // Set for Drive backups: the Drive file id and its browser link.
+  driveFileId String?
+  driveLink   String?
+
+  @@index([kind, destination, createdAt])
 }
 
 // cognitive_category drives the clustering penalty in the scheduler (Sprint 3).

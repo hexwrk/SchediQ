@@ -31,12 +31,16 @@ Migrations, in order: `init`, `scheduling_prefs`, `session_completion`,
 NOT NULL), `courses_lessons` (Course, Lesson, Course.subjectId, Task.lessonId),
 `password_reset` (hashed, single-use reset tokens), `task_in_progress` and
 `backfill_in_progress` (IN_PROGRESS status), `must_change_password` (flag set
-by an admin-issued temporary password), `token_version` (session revocation).
+by an admin-issued temporary password), `token_version` (session revocation),
+`user_username` (adds `User.username`, backfills every existing account from
+its email local part, deduplicated, THEN sets NOT NULL + UNIQUE),
+`backup_destination` (`BackupLog.destination` local/drive plus the Drive file
+id and link).
 
 Tests (Node's built-in runner, no extra framework):
 
 ```bash
-cd backend && npm test          # scheduler, mastery, validators, rule parser, task progress, env validation
+cd backend && npm test          # scheduler, mastery, validators (password, username), rule parser, task progress, env + Drive config
 ```
 
 Health checks: `curl localhost:4000/api/health` returns `{"status":"ok"}`;
@@ -90,9 +94,14 @@ The seed creates exactly one account; there are no demo users or demo data.
 
 | Account | Password | Role / tier |
 | --- | --- | --- |
-| `admin@schediq.app` | `admin1234` | SUPER_ADMIN, PREMIUM (admin users, System & backup, Data model, Admin report) |
+| `admin@schediq.app` (username `admin`) | `Study-Plan-2026!` | SUPER_ADMIN, PREMIUM (admin users, System & backup, Data model, Admin report) |
 
-`admin1234` is the local default only. With `NODE_ENV=production` the seed
+`Study-Plan-2026!` is the local default only (it meets the stronger password
+rules; the old `admin1234` does not). Re-running the seed resets the admin's
+password to it and assigns the reserved username `admin` (the backfill gives
+the existing admin `admin1`, because `admin` is reserved). Existing accounts
+keep logging in with their current passwords: the rules apply when a password
+is set, not at login. With `NODE_ENV=production` the seed
 refuses to run unless `SEED_ADMIN_PASSWORD` is set, and the password can be
 changed any time on **Account > Change password**. Students register themselves
 at `/register` and start on the FREE tier.
@@ -127,8 +136,23 @@ errors under each input; the backend wraps the same functions in zod
 - **Email**: `local@domain.tld`, where the label before the TLD is at least 2
   characters and the TLD is at least 2 letters. Rejects `yd@g.com` and
   `a@b.c`, accepts `tristan@gmail.com`. Stored lower-cased.
-- **Password**: 8-72 characters with at least one letter and one number, plus a
-  strength hint on sign-up. 72 is bcrypt's input limit.
+- **Password** (`passwordChecks` in `shared/validation.ts`): 12-72 characters
+  with an uppercase letter, a lowercase letter, a number and a symbol; must not
+  contain the username or the email name (the part before `@`, ignoring
+  `+tag`, 3+ chars); must not be a common password. The blocklist
+  (`COMMON_PASSWORDS`) is matched after stripping leading/trailing digits and
+  symbols and undoing l33t swaps, so `Password123!` and `P@ssw0rd!` are caught.
+  72 is bcrypt's input limit. Register, Reset password and Change password show
+  a live checklist (one line per rule, ticked as you type) and a strength
+  meter; the submit button stays disabled until every rule passes. The server
+  returns one message per failing rule in `details.fieldErrors.password`.
+  On Reset, the page only has the token, so the "not your username/email" rule
+  is shown as "checked when you submit" and enforced by the server.
+- **Username**: 3-20 characters, lowercase letters, digits and `_`, must start
+  with a letter, no spaces; trimmed and lower-cased on input (`  Tristan_J ` is
+  stored as `tristan_j`); reserved names (`admin`, `root`, `system`, `api`,
+  `support`... see `RESERVED_USERNAMES`) are refused. Unique. Login stays by
+  email.
 - **Name**: required (whitespace-only is blank), up to 80 characters.
 - **Numbers**: duration 5-600 min, daily limit 30-720 min, break 0-120 min,
   lessons per course 2-6. Blank, non-numeric, negative and decimal input each
@@ -238,7 +262,9 @@ Log in as `admin@schediq.app`. A "Super admin" section appears in the sidebar
 `requireSuperAdmin`, so a normal user gets `403`. In the UI, a normal user who
 opens `/admin` sees an "Access denied" page.
 
-- **Users**: every account with role, tier and counts. Change role or tier.
+- **Users**: every account with role, tier, username and counts. Change role
+  or tier. The search box (name, email or username, debounced) queries the
+  server (`GET /api/admin/users?q=`), so it scales as the user list grows.
   Delete requires typing the account's email. Admins cannot demote or delete
   themselves. **Reset password** issues a one-time temporary password, shown
   to the admin once; the user is asked to change it after logging in (account
@@ -262,8 +288,16 @@ opens `/admin` sees an "Access denied" page.
 
 ## 11. Reports
 
-**Reports** in the sidebar. Each report is a printable page (**Print / Save as
-PDF** hides the app chrome) with a **Download CSV** of the same data:
+**Reports** in the sidebar. Study schedule, Workload summary and Progress
+report each have **Download PDF**, which builds a real `.pdf` file in the
+browser (jsPDF + jspdf-autotable, loaded on click) and downloads it: title,
+generated date and time, your name, username and email, the period, the summary
+totals, vector bar chart(s) and the report table(s), with page numbers. No print
+dialog and no server work, so it behaves the same on Vercel. **Print** (app
+chrome hidden) and **Download CSV** of the same data are still there. The
+on-screen totals, CSV and PDF are built from the same arrays, so they agree.
+Non-Latin-1 characters in titles (emoji, CJK) print as `?` in the PDF because
+the built-in Helvetica font cannot draw them.
 
 1. Study schedule: upcoming sessions (day, time, task, subject).
 2. Workload summary: tasks by subject and by priority, with hours and counts.
@@ -452,6 +486,57 @@ What the code does for production:
   responses with full server-side logs.
 - `prisma migrate deploy` for production schema changes (never `migrate dev`).
 - Seed in production requires `SEED_ADMIN_PASSWORD`.
+
+## 21. Usernames
+
+`User.username` is required and unique. Register has a Username field with live
+format messages (every failing rule listed) and a debounced availability check
+(`GET /api/auth/username-available?username=`, rate limited to 60 / 15 min /
+IP), which answers "available", "taken" or the format problems. A sign-up race
+for the same name is settled by the unique index and returns the same
+`409` field error. The username shows on the Account page, in the top bar and
+in the admin Users list.
+
+Migration `20261101090000_user_username` backfills existing rows in signup
+order: email local part, lower-cased, `+tag` dropped, other characters turned
+into `_`, prefixed with `u` if it does not start with a letter, padded to 3,
+cut to 20; a reserved or taken name gets a numeric suffix (`john`, `john1`,
+`john11` if `john1` already belonged to someone). Only after every row has a
+valid unique name does it add NOT NULL and the unique index, so it cannot fail
+on existing data. A test keeps the migration's reserved list identical to the
+shared one.
+
+## 22. Search on lists
+
+Tasks, Subjects, Courses and admin Users each have a search box (250 ms
+debounce) that narrows the list by title/name (plus subject, topic, email or
+username where relevant) with an "N of M shown" count and a Clear search empty
+state. Your own tasks, subjects and courses are filtered in the browser (they
+are already loaded and small); admin Users is searched on the server. The
+existing Delete on each row works on the filtered results and still asks for
+confirmation (Tasks/Subjects/Courses: a confirm dialog; Users: type the
+account's email).
+
+## 23. Off-site backup to Google Drive
+
+**System & backup > Back up to Google Drive** uploads a gzipped full-system dump
+to the admin's Google Drive and shows the link. Setup (Google Cloud project,
+consent screen, OAuth Playground refresh token, env vars) is in
+`docs/GOOGLE_DRIVE_BACKUP.md`. Env vars, all optional:
+
+```
+GOOGLE_DRIVE_CLIENT_ID=
+GOOGLE_DRIVE_CLIENT_SECRET=
+GOOGLE_DRIVE_REFRESH_TOKEN=
+GOOGLE_DRIVE_FOLDER_ID=        # optional, must be a folder the app created
+BACKUP_SCHEDULE=               # optional: daily, or a cron expression
+```
+
+Drive backup is on only when the first three are all set (`driveConfigured()`
+in `env.ts`); otherwise the page shows "Configure Google Drive backup" and
+`POST /api/admin/backup/drive` returns `409 DRIVE_NOT_CONFIGURED`. Each upload is
+logged in `BackupLog` (`destination = drive`, Drive file id and link). A
+downloaded `.sql.gz` / `.json.gz` can be uploaded on the Restore form as is.
 
 ## Production build check
 
