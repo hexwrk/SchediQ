@@ -22,7 +22,7 @@ step number.
 | 13 | Course generator | Courses, generate "SQL joins", Beginner, 3 lessons, link a subject | Course opens with 3 lessons, progress 0/3 | [ ] |
 | 14 | Lesson + quiz | Open lesson 1, answer the quiz, Submit | Score shown with correct answers; "+50 XP" if passed; course bar 1/3; subject mastery rises on the Dashboard; persists after reload | [ ] |
 | 15 | Lesson <-> task | "Add this course to my schedule", regenerate, complete that lesson's study blocks | The lesson shows Completed in the course | [ ] |
-| 16 | Tier gate | As a FREE account that already has 2 courses, generate a third | "Upgrade to Premium" prompt, not an error; after Upgrade (demo) generating works | [ ] |
+| 16 | Free is unlimited | As a FREE account that already has 2 courses, generate a third, then run 6+ AI parses in a day | Every request works (no 402, no Upgrade prompt); the Premium page shows "coming in a future update" with no upgrade button | [ ] |
 | 17 | Reports | Reports, open each; change the date range; Print; Download CSV | Title, date, your name, totals, chart(s), table; figures change with the range; print view hides the app chrome; CSV opens in a spreadsheet | [ ] |
 | 18 | Admin gate | As a normal user, open `/admin` | "Access denied" page; API returns 403 | [ ] |
 | 19 | Admin | As `admin@schediq.app`: change a user's tier, view Data model, Create backup | Changes apply; diagram shows live counts; a `.sql` file downloads | [ ] |

@@ -101,6 +101,7 @@ every problem, with no secrets printed.
 | `JWT_EXPIRES_IN` | `7d` |
 | `AI_PARSER` | `openai` |
 | `OPENAI_API_KEY` | your key (required when `AI_PARSER=openai`) |
+| `AI_RATE_LIMIT_PER_HOUR` | optional; per-user AI requests per hour, default `200` |
 | `DEMO_MODE` | `false` |
 | `CORS_ORIGIN` | `http://localhost:3000` for now (replaced in step 4) |
 | `APP_URL` | optional; defaults to the first `CORS_ORIGIN` (used in reset links) |
@@ -219,8 +220,9 @@ Deploy and note the URL, e.g. `https://schediq.vercel.app`.
 - The Neon, Render and Vercel free tiers cover a student project.
 - Render free means cold starts after idle time.
 - OpenAI calls cost real money per call. Several controls bound it:
-  - tier caps (FREE: 5 parses/day, 2 courses)
-  - the AI rate limit (20/hour/user)
+  - the AI rate limit (`AI_RATE_LIMIT_PER_HOUR`, default 200/hour/user). Tier
+    caps are off during the demo, so this is the per-user bound; lower it for
+    a public deploy with `AI_PARSER=openai`
   - output token caps (300 for a parse, 400 + 1100 per lesson for a course)
   - a 20 s timeout with a single retry
   Check the current `gpt-4o-mini` price in the OpenAI dashboard before quoting
@@ -232,8 +234,8 @@ Deploy and note the URL, e.g. `https://schediq.vercel.app`.
   temporary password. The reset link is written to the Render log, so treat log
   access as sensitive. Add a transactional mailer (e.g. Resend) and send the
   link there instead.
-- **Payments:** the Premium tier is a labelled demo ("billing coming soon").
-  Add Stripe later.
+- **Payments:** none. All features are free during the demo; Premium is a
+  "coming in a future update" preview (`docs/ROADMAP.md`).
 - **Rate limit store:** in memory, which is correct for one Render instance.
   Scaling to several instances needs a shared store (Redis) so the counters are
   global.

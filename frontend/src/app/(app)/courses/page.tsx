@@ -4,9 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { COURSE_LEVELS, NUMBER_LIMITS, TOPIC_MAX, validateIntInRange, validateTopic } from "@shared/validation";
-import { ApiError, Course, CourseLevel, Subject, Usage, coursesApi, subjectsApi } from "@/lib/api";
+import { Course, CourseLevel, Subject, Usage, coursesApi, subjectsApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { FieldError, FieldErrors, UpgradePrompt, collectErrors, hasErrors, inputClass, serverFieldErrors } from "@/lib/form";
+import { FieldError, FieldErrors, collectErrors, hasErrors, inputClass, serverFieldErrors } from "@/lib/form";
 import { CapIcon, SparkIcon } from "@/lib/icons";
 import { LevelPill, ProgressBar } from "@/lib/ui";
 import { SearchBox, matchesQuery, useDebounced } from "@/lib/search";
@@ -39,7 +39,6 @@ export default function CoursesPage() {
   const [subjectId, setSubjectId] = useState("");
   const [errors, setErrors] = useState<FieldErrors<Field>>({});
   const [generating, setGenerating] = useState(false);
-  const [upgradeMsg, setUpgradeMsg] = useState<string | null>(null);
 
   // Picking a subject pre-fills the topic, the common "learn my weak subject" path.
   function pickSubject(id: string) {
@@ -52,7 +51,6 @@ export default function CoursesPage() {
     e.preventDefault();
     if (!token) return;
     setActionError(null);
-    setUpgradeMsg(null);
     const found = collectErrors<Field>({
       topic: validateTopic(topic),
       level: COURSE_LEVELS.includes(level) ? null : "Choose a level.",
@@ -72,13 +70,9 @@ export default function CoursesPage() {
       });
       router.push(`/courses/${res.course.id}`);
     } catch (err) {
-      if (err instanceof ApiError && err.upgradeRequired) {
-        setUpgradeMsg(err.message);
-      } else {
-        const fromServer = serverFieldErrors(err, FIELDS);
-        setErrors(fromServer);
-        if (!hasErrors(fromServer)) setActionError(errorMessage(err, "Could not generate the course"));
-      }
+      const fromServer = serverFieldErrors(err, FIELDS);
+      setErrors(fromServer);
+      if (!hasErrors(fromServer)) setActionError(errorMessage(err, "Could not generate the course"));
       setGenerating(false);
     }
   }
@@ -100,7 +94,6 @@ export default function CoursesPage() {
     }
   }
 
-  const atCap = !!usage && usage.limit !== null && usage.used >= usage.limit;
   const lc = NUMBER_LIMITS.lessonCount;
 
   return (
@@ -248,8 +241,6 @@ export default function CoursesPage() {
           <FieldError message={errors.subjectId} />
         </label>
 
-        {upgradeMsg && <UpgradePrompt message={upgradeMsg} />}
-
         <button
           type="submit"
           disabled={generating}
@@ -261,13 +252,8 @@ export default function CoursesPage() {
         {usage && (
           <p className="text-xs text-text-muted">
             {usage.limit === null
-              ? `Premium: unlimited courses (${usage.used} so far).`
-              : `Free plan: ${usage.used} of ${usage.limit} courses used.`}{" "}
-            {atCap && (
-              <Link href="/upgrade" className="text-violet hover:underline">
-                Upgrade
-              </Link>
-            )}
+              ? `Unlimited courses during the demo (${usage.used} so far).`
+              : `${usage.used} of ${usage.limit} courses used.`}
           </p>
         )}
       </form>

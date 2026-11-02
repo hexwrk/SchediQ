@@ -65,7 +65,7 @@ export default function AccountPage() {
           <dd>
             {user.accountType === "PREMIUM" ? "Premium (demo)" : "Free"}{" "}
             <Link href="/upgrade" className="text-primary hover:underline">
-              {user.accountType === "PREMIUM" ? "Manage" : "Upgrade"}
+              {user.accountType === "PREMIUM" ? "Manage" : "Premium preview"}
             </Link>
           </dd>
         </dl>

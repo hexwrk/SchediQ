@@ -124,8 +124,9 @@ and progress grow:
 5. On the course page, **Add this course to my schedule** creates one task per
    lesson. Regenerate: lessons are paced one per day per course. Completing a
    lesson's study block completes the lesson, and vice versa.
-6. **Tier gate**: as a FREE account, generate a third course to see the
-   "Upgrade to Premium" prompt; **Upgrade** (demo, no payment) lifts it.
+6. **No tier gate during the demo**: a FREE account generates as many courses
+   and AI parses as it likes; **Premium** in the sidebar is a "coming in a
+   future update" preview (`docs/ROADMAP.md`).
 
 ## 5. Validation (client AND server, one shared rule file)
 
@@ -195,9 +196,10 @@ psql postgresql://schediq:schediq@localhost:5432/schediq \
 - Every lesson has an explanation, key points and a 3-question multiple-choice
   quiz. The answer key is withheld from the API until the first submission, and
   grading happens on the server (`PATCH /api/lessons/:id { quizAnswers }`).
-- **Tier gate**: FREE accounts can generate 2 courses, PREMIUM is unlimited.
-  At the cap the API returns `402 { code: "UPGRADE_REQUIRED" }` and the UI
-  shows an Upgrade prompt.
+- **Tier gate (off for the demo)**: with `TIER_LIMITS_ENABLED = true` in
+  `shared/validation.ts`, FREE accounts can generate 2 courses and the API
+  returns `402 { code: "UPGRADE_REQUIRED" }` at the cap. It is `false`, so
+  generation is unlimited on every account.
 
 Other endpoints: `GET /api/courses`, `GET /api/courses/:id`,
 `PATCH /api/courses/:id { subjectId }`, `DELETE /api/courses/:id`,
@@ -250,10 +252,14 @@ course progress and 14-day trend.
 
 ## 9. Account tiers (demo, no billing)
 
-FREE: 5 AI task parses per day and 2 generated courses. PREMIUM: unlimited.
-The tier badge in the top bar links to **Upgrade**, which flips the tier via
-`PATCH /api/account/tier`. The page states plainly that this is a demo tier and
-nothing is charged.
+During the demo every feature is free with no limits on any account:
+`TIER_LIMITS_ENABLED = false` in `shared/validation.ts` turns off the FREE caps
+(5 AI parses per day, 2 generated courses), and `tierLimit()` in
+`backend/src/lib/tier.ts` is the one place they are decided. Set it to `true`
+to re-enable them. The `accountType` field and the PREMIUM value are kept (the
+admin can still set it), but nothing is gated on it. The tier badge links to
+**Premium**, a preview of planned Premium features labelled as not yet
+available, with no tier switch. See `docs/ROADMAP.md`.
 
 ## 10. Super admin
 
@@ -481,7 +487,8 @@ What the code does for production:
 - `helmet` security headers, no `X-Powered-By`, `trust proxy` = 1 for Render.
 - CORS allowlist from `CORS_ORIGIN` (comma-separated, `*` refused).
 - Rate limits: 10 requests / 15 min / IP on login, register, forgot, reset and
-  change password; 20 / hour / user on `/api/ai/*` and course generation.
+  change password; `AI_RATE_LIMIT_PER_HOUR` (default 200) / hour / user on
+  `/api/ai/*` and course generation, as an abuse guard rather than a plan limit.
 - One access log line per request (`morgan`, no bodies); generic error
   responses with full server-side logs.
 - `prisma migrate deploy` for production schema changes (never `migrate dev`).

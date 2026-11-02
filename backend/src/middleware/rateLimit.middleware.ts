@@ -1,5 +1,6 @@
 import { Request } from "express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { env } from "../lib/env";
 
 // Rate limits. In-memory store: correct for a single Render instance; a
 // horizontally scaled deploy would need a shared store (e.g. Redis) so the
@@ -36,16 +37,19 @@ export function lookupLimiter(action: string) {
   });
 }
 
-// AI endpoints: ~20 requests / hour / USER (every call can cost money). Keyed
-// by the authenticated user id, so it must be mounted after requireAuth; the
-// IP fallback only applies if that ordering is ever broken.
+// AI endpoints: AI_RATE_LIMIT_PER_HOUR requests / hour / USER (default 200).
+// An abuse and cost guard (every call can cost money), not a plan limit, so it
+// is generous enough that a demo never hits it. Keyed by the authenticated
+// user id, so it must be mounted after requireAuth; the IP fallback only
+// applies if that ordering is ever broken.
 export function aiLimiter() {
+  const limit = env().AI_RATE_LIMIT_PER_HOUR;
   return rateLimit({
     windowMs: ONE_HOUR,
-    limit: 20,
+    limit,
     standardHeaders: "draft-8",
     legacyHeaders: false,
     keyGenerator: (req: Request) => (req.userId ? `user:${req.userId}` : ipKeyGenerator(req.ip ?? "")),
-    message: { error: "AI request limit reached (20 per hour). Try again later.", code: "RATE_LIMITED" },
+    message: { error: `AI request limit reached (${limit} per hour). Try again later.`, code: "RATE_LIMITED" },
   });
 }

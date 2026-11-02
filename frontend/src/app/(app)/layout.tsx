@@ -47,7 +47,7 @@ const NAV: NavItem[] = [
   { href: "/progress", label: "Progress", Icon: TrophyIcon },
   { href: "/reports", label: "Reports", Icon: ReportIcon },
   { href: "/preferences", label: "Preferences", Icon: SlidersIcon },
-  { href: "/upgrade", label: "Upgrade", Icon: StarIcon },
+  { href: "/upgrade", label: "Premium", Icon: StarIcon },
   { href: "/account", label: "Account", Icon: UserIcon },
 ];
 
@@ -69,7 +69,7 @@ const PAGE_TITLES: [string, string][] = [
   ["/progress", "Progress"],
   ["/reports", "Reports"],
   ["/preferences", "Preferences"],
-  ["/upgrade", "Upgrade"],
+  ["/upgrade", "Premium (preview)"],
   ["/account", "Account"],
   ["/admin/system", "System & backup"],
   ["/admin/data-model", "Data model"],
@@ -269,7 +269,7 @@ function TierBadge({ user }: { user: AuthUser }) {
       )}
       <Link
         href="/upgrade"
-        title={premium ? "Premium plan (demo tier)" : "Free plan: click to see Premium"}
+        title={premium ? "Premium plan (demo tier)" : "Free plan: every feature included. Click to preview Premium"}
         className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
           premium ? "bg-violet text-on-solid" : "bg-bg text-text-muted ring-1 ring-border"
         }`}

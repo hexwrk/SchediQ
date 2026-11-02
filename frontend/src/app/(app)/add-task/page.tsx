@@ -23,7 +23,6 @@ import {
   FieldErrors,
   TASK_FIELDS,
   TaskField,
-  UpgradePrompt,
   hasErrors,
   inputClass,
   serverFieldErrors,
@@ -53,8 +52,6 @@ export default function AddTaskPage() {
   // Raw input string; validated with validateIntInRange before saving.
   const [durationMin, setDurationMin] = useState("60");
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<TaskField>>({});
-  // Set when the FREE daily parse cap is hit (402): shows the upgrade prompt.
-  const [upgradeMsg, setUpgradeMsg] = useState<string | null>(null);
   const [priority, setPriority] = useState<TaskPriority>("MEDIUM");
   const [subjectId, setSubjectId] = useState("");
 
@@ -66,7 +63,6 @@ export default function AddTaskPage() {
     if (!token || !text.trim()) return;
     setParsing(true);
     setError(null);
-    setUpgradeMsg(null);
     try {
       const parsed = await aiApi.parse(token, text);
       setParseInfo(parsed);
@@ -85,11 +81,7 @@ export default function AddTaskPage() {
         setPendingSubjectName("");
       }
     } catch (err) {
-      if (err instanceof ApiError && err.upgradeRequired) {
-        setUpgradeMsg(err.message);
-      } else {
-        setError(err instanceof ApiError ? err.message : "Parse failed");
-      }
+      setError(err instanceof ApiError ? err.message : "Parse failed");
     } finally {
       setParsing(false);
     }
@@ -178,7 +170,6 @@ export default function AddTaskPage() {
         </div>
       </div>
 
-      {upgradeMsg && <UpgradePrompt message={upgradeMsg} />}
       {subjectsQuery.error && (
         <ErrorState
           title="Couldn't load your subjects"

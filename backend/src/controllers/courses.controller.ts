@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma";
 import { CourseTemplate, QuizQuestion, pickTemplate } from "../lib/courseTemplates";
 import { XP_RULES } from "../lib/gamification";
 import { aiEnabled, logAiFailure, openAiClient } from "../lib/openai";
+import { tierLimit } from "../lib/tier";
 import { courseLevelField, intField, topicField } from "../lib/validators";
 import { FREE_COURSE_LIMIT } from "../../../shared/validation";
 
@@ -173,7 +174,7 @@ async function courseUsage(userId: string) {
     prisma.user.findUnique({ where: { id: userId }, select: { accountType: true } }),
     prisma.course.count({ where: { userId } }),
   ]);
-  const limit = user?.accountType === "PREMIUM" ? null : FREE_COURSE_LIMIT;
+  const limit = tierLimit(user?.accountType ?? "FREE", FREE_COURSE_LIMIT);
   return { used, limit, remaining: limit === null ? null : Math.max(0, limit - used) };
 }
 
@@ -221,7 +222,8 @@ export async function generateCourse(req: Request, res: Response) {
   const userId = req.userId as string;
   const { topic, level, lessonCount, subjectId } = generateSchema.parse(req.body);
 
-  // Tier gate: 402 + code lets the UI show an Upgrade prompt, not a raw error.
+  // Tier gate: dormant while TIER_LIMITS_ENABLED is false (limit is always
+  // null, so every account generates without a cap). Kept for re-enabling.
   const usage = await courseUsage(userId);
   if (usage.limit !== null && usage.used >= usage.limit) {
     return res.status(402).json({

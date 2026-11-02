@@ -88,6 +88,12 @@ const schema = z.object({
     }),
   AI_PARSER: z.enum(["rule", "openai"], { message: 'is required: "rule" (offline) or "openai"' }),
   OPENAI_API_KEY: optionalString,
+  // Per-user AI requests per hour (task parse + course generation). An abuse
+  // and cost guard, not a plan limit: generous by default so a demo is never
+  // blocked. Unset = 200.
+  AI_RATE_LIMIT_PER_HOUR: optionalString
+    .transform((v) => (v === undefined ? 200 : Number(v)))
+    .pipe(z.number().int("must be a whole number from 1 to 10000").min(1, "must be a whole number from 1 to 10000").max(10000, "must be a whole number from 1 to 10000")),
   // Shows reset links in the API response, enables UI backups. Never in prod.
   DEMO_MODE: boolFlag(false),
   // Frontend origin used to build password reset links. Defaults to the

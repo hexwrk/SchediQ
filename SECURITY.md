@@ -186,7 +186,10 @@ Every query for user data is scoped to the authenticated user:
 
 ## 8. Account tiers
 
-The FREE/PREMIUM tier is a demo flag, with no payment data anywhere. Limits
+The FREE/PREMIUM tier is a demo flag, with no payment data anywhere. During
+the demo the FREE caps are switched off (`TIER_LIMITS_ENABLED = false`), so
+no account is gated and the per-user AI rate limit (`AI_RATE_LIMIT_PER_HOUR`,
+default 200/hour) is the only bound on AI calls. With the switch on, limits
 (5 AI parses per day, 2 courses) are enforced on the server with `402
 UPGRADE_REQUIRED`, not just hidden in the UI. Known gap: the daily parse check
 is count-then-insert, so two simultaneous requests at the boundary could both

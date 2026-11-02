@@ -335,6 +335,12 @@ export function validateTopic(value: string): ValidationResult {
 
 // ---------- Tier limits ----------
 
+// Master switch for the Free plan caps below. OFF for the demo: every account,
+// FREE included, gets every feature with no limits, and Premium is only a
+// "future update" preview (docs/ROADMAP.md). Set to true to re-enable the caps
+// and the 402 UPGRADE_REQUIRED gates in the AI and courses controllers.
+export const TIER_LIMITS_ENABLED = false;
+
 // FREE tier cap on AI parses per calendar day. PREMIUM is unlimited. Shared so
 // the Upgrade page copy and the server gate quote the same number.
 export const FREE_AI_PARSES_PER_DAY = 5;

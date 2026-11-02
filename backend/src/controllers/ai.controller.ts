@@ -308,9 +308,9 @@ export async function parseTask(req: Request, res: Response) {
   const now = new Date();
   const userId = req.userId as string;
 
-  // Tier gate: FREE accounts get a fixed number of parses per day. 402 with a
-  // machine-readable code lets the client show an "Upgrade to Premium" prompt
-  // instead of a raw error. Count-then-insert is not atomic, so two parallel
+  // Tier gate: dormant while TIER_LIMITS_ENABLED is false (limit is always
+  // null, so every account parses without a daily cap). With it on, FREE gets
+  // a fixed number of parses per day and a 402 UPGRADE_REQUIRED. Count-then-insert is not atomic, so two parallel
   // requests at the boundary could both pass; acceptable for a demo cap, a real
   // billing limit would use a row lock or a counter with a CHECK constraint.
   const account = await prisma.user.findUnique({

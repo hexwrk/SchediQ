@@ -21,7 +21,9 @@ import { errorMessage, useApi } from "@/lib/use-api";
 
 const MAX_UPLOAD_MB = 50;
 // Setup guide for the off-site cloud backup (S3_* env vars for R2 / B2).
-const CLOUD_SETUP_URL = "https://github.com/hexwrk/SchediQ/blob/develop/docs/CLOUD_BACKUP.md";
+// blob/HEAD follows the repo's default branch, so the link survives a
+// develop -> main switch without another code change.
+const CLOUD_SETUP_URL = "https://github.com/hexwrk/SchediQ/blob/HEAD/docs/CLOUD_BACKUP.md";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;

@@ -1,179 +1,74 @@
 "use client";
 
-import { useState } from "react";
-import { FREE_AI_PARSES_PER_DAY, FREE_COURSE_LIMIT } from "@shared/validation";
-import { AccountType, ApiError, Usage, accountApi, coursesApi } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { StarIcon } from "@/lib/icons";
-import { ErrorState } from "@/lib/states";
-import { useApi } from "@/lib/use-api";
 
-async function loadUsage(token: string): Promise<{ parses: Usage; courses: Usage }> {
-  const [a, c] = await Promise.all([accountApi.get(token), coursesApi.list(token)]);
-  return { parses: a.usage.aiParses, courses: c.usage };
-}
+// Premium preview. During the demo every feature is free with no limits
+// (TIER_LIMITS_ENABLED = false in shared/validation.ts), so this page only
+// describes what a future Premium plan might add. There is no tier switch and
+// no payment; see docs/ROADMAP.md.
 
-// Free vs Premium comparison with a DEMO upgrade button. There is no payment:
-// the button flips the account tier via PATCH /api/account/tier so the gated
-// features can be demonstrated. The copy says so plainly.
+const INCLUDED = [
+  "Tasks, subjects and the study scheduler",
+  "Unlimited AI task parsing",
+  "Unlimited AI-generated courses with quizzes",
+  "Progress, XP, streaks and badges",
+  "Reports with PDF and CSV export",
+];
 
-const ROWS: { feature: string; free: string; premium: string }[] = [
-  { feature: "Tasks, subjects and the study scheduler", free: "Unlimited", premium: "Unlimited" },
-  { feature: "Progress, XP, streaks and badges", free: "Included", premium: "Included" },
-  { feature: "AI task parsing", free: `${FREE_AI_PARSES_PER_DAY} per day`, premium: "Unlimited" },
-  { feature: "Generated courses", free: `${FREE_COURSE_LIMIT} in total`, premium: "Unlimited" },
-  { feature: "Reports (print / CSV)", free: "Included", premium: "Included" },
+// Planned, not built. Keep in step with docs/ROADMAP.md.
+const PLANNED = [
+  "A paid monthly plan with real billing",
+  "Higher AI parsing and course-generation allowances once Free plan limits return",
+  "Priority access to new features as they ship",
 ];
 
 export default function UpgradePage() {
-  const { token, user, setUser } = useAuth();
-  const usageQuery = useApi("plan-usage", loadUsage);
-  const parses = usageQuery.data?.parses ?? null;
-  const courses = usageQuery.data?.courses ?? null;
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-
-  async function switchTo(tier: AccountType) {
-    if (!token) return;
-    setSaving(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const res = await accountApi.setTier(token, tier);
-      setUser(res.user);
-      await usageQuery.reload();
-      setMessage(tier === "PREMIUM" ? "You're on Premium (demo). Limits are lifted." : "Switched back to the Free plan.");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not change plan");
-    } finally {
-      setSaving(false);
-    }
-  }
-
+  const { user } = useAuth();
   if (!user) return null;
-  const premium = user.accountType === "PREMIUM";
 
   return (
     <div className="flex max-w-3xl flex-col gap-6">
-      <div className="rounded-card border border-amber/40 bg-amber/5 px-4 py-3 text-sm">
-        <span className="font-semibold">Demo tier: billing coming soon.</span> SchediQ does not take
-        payments yet. The button below just switches your account between Free and Premium so the
-        difference can be shown. Nothing is charged.
+      <div role="status" className="rounded-card border border-accent/40 bg-accent/5 px-4 py-3 text-sm">
+        <span className="font-semibold">All features are currently free during the demo.</span> There are no
+        limits on any account, and nothing is charged.
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <PlanCard
-          name="Free"
-          price="R0"
-          current={!premium}
-          lines={[`${FREE_AI_PARSES_PER_DAY} AI parses per day`, `${FREE_COURSE_LIMIT} generated courses`, "Full scheduler and progress"]}
-        />
-        <PlanCard
-          name="Premium"
-          price="Demo"
-          current={premium}
-          highlight
-          lines={["Unlimited AI parsing", "Unlimited generated courses", "Everything in Free"]}
-        />
-      </div>
-
-      <div className="overflow-hidden rounded-card border border-border bg-surface">
-        <table className="w-full text-sm">
-          <thead className="bg-bg text-left text-xs uppercase tracking-wide text-text-muted">
-            <tr>
-              <th className="px-4 py-2 font-medium">Feature</th>
-              <th className="px-4 py-2 font-medium">Free</th>
-              <th className="px-4 py-2 font-medium">Premium</th>
-            </tr>
-          </thead>
-          <tbody>
-            {ROWS.map((r) => (
-              <tr key={r.feature} className="border-t border-border">
-                <td className="px-4 py-2">{r.feature}</td>
-                <td className="px-4 py-2 text-text-muted">{r.free}</td>
-                <td className="px-4 py-2 font-medium text-violet">{r.premium}</td>
-              </tr>
+        <section className="flex flex-col gap-3 rounded-card border border-border bg-surface p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Free</h2>
+            <span className="rounded-full bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-accent">
+              Current plan
+            </span>
+          </div>
+          <p className="text-2xl font-semibold tracking-tight">R0</p>
+          <ul className="flex flex-col gap-1 text-sm text-text-muted">
+            {INCLUDED.map((l) => (
+              <li key={l}>• {l}</li>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </ul>
+        </section>
 
-      <div className="flex flex-col gap-3 rounded-card border border-border bg-surface p-5">
-        <h2 className="text-sm font-semibold">Your usage</h2>
-        {usageQuery.error && (
-          <ErrorState message={usageQuery.error} onRetry={usageQuery.reload} retrying={usageQuery.reloading} />
-        )}
-        <p className="text-sm text-text-muted">
-          AI parses today:{" "}
-          <span className="font-medium text-text">
-            {parses ? (parses.limit === null ? `${parses.used} (unlimited)` : `${parses.used} / ${parses.limit}`) : "..."}
-          </span>
-          {" · "}Courses:{" "}
-          <span className="font-medium text-text">
-            {courses ? (courses.limit === null ? `${courses.used} (unlimited)` : `${courses.used} / ${courses.limit}`) : "..."}
-          </span>
-        </p>
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        {message && <p className="text-sm text-accent">{message}</p>}
-        <div>
-          {premium ? (
-            <button
-              onClick={() => switchTo("FREE")}
-              disabled={saving}
-              className="rounded-lg border border-border px-5 py-2 text-sm font-medium hover:bg-bg disabled:opacity-50"
-            >
-              {saving ? "Switching..." : "Switch back to Free"}
-            </button>
-          ) : (
-            <button
-              onClick={() => switchTo("PREMIUM")}
-              disabled={saving}
-              className="inline-flex items-center gap-2 rounded-lg bg-violet px-5 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
-            >
+        <section className="flex flex-col gap-3 rounded-card border border-dashed border-violet/50 bg-surface p-5">
+          <div className="flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-lg font-semibold text-violet">
               <StarIcon width={16} height={16} />
-              {saving ? "Upgrading..." : "Upgrade to Premium (demo, no payment)"}
-            </button>
-          )}
-        </div>
+              Premium
+            </h2>
+            <span className="rounded-full bg-violet/10 px-2.5 py-0.5 text-xs font-semibold text-violet">
+              Not yet available
+            </span>
+          </div>
+          <p className="text-2xl font-semibold tracking-tight">Coming in a future update</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Planned (subject to change)</p>
+          <ul className="flex flex-col gap-1 text-sm text-text-muted">
+            {PLANNED.map((l) => (
+              <li key={l}>• {l}</li>
+            ))}
+          </ul>
+        </section>
       </div>
-    </div>
-  );
-}
-
-function PlanCard({
-  name,
-  price,
-  lines,
-  current,
-  highlight,
-}: {
-  name: string;
-  price: string;
-  lines: string[];
-  current: boolean;
-  highlight?: boolean;
-}) {
-  return (
-    <div
-      className={`flex flex-col gap-3 rounded-card border bg-surface p-5 ${
-        highlight ? "border-violet/50" : "border-border"
-      }`}
-    >
-      <div className="flex items-center justify-between">
-        <h2 className={`text-lg font-semibold ${highlight ? "text-violet" : ""}`}>{name}</h2>
-        {current && (
-          <span className="rounded-full bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-accent">
-            Current plan
-          </span>
-        )}
-      </div>
-      <p className="text-2xl font-semibold tracking-tight">{price}</p>
-      <ul className="flex flex-col gap-1 text-sm text-text-muted">
-        {lines.map((l) => (
-          <li key={l}>• {l}</li>
-        ))}
-      </ul>
     </div>
   );
 }

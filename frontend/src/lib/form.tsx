@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import {
   TITLE_MAX,
   validateDeadline,
@@ -56,24 +55,6 @@ export function serverFieldErrors<K extends string>(err: unknown, fields: readon
     if (msg) out[f] = msg;
   }
   return out;
-}
-
-// Friendly replacement for a 402 tier-cap error.
-export function UpgradePrompt({ message }: { message: string }) {
-  return (
-    <div className="flex flex-col gap-2 rounded-card border border-violet/40 bg-violet/5 p-4 sm:flex-row sm:items-center sm:justify-between">
-      <div>
-        <p className="text-sm font-semibold text-violet">Upgrade to Premium</p>
-        <p className="text-sm text-text-muted">{message}</p>
-      </div>
-      <Link
-        href="/upgrade"
-        className="shrink-0 rounded-lg bg-violet px-4 py-2 text-center text-sm font-medium text-on-solid hover:opacity-90"
-      >
-        See Premium
-      </Link>
-    </div>
-  );
 }
 
 // Task form rules, shared by Add task and the inline edit on Task list. Duration
