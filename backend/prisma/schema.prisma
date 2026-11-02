@@ -92,10 +92,13 @@ model BackupLog {
   filename   String
   sizeBytes  Int
   actorEmail String
-  // "local" (downloaded to the admin's browser) | "drive" (uploaded to
-  // Google Drive). Existing rows are local.
+  // "local" (downloaded to the admin's browser) | "s3" (uploaded to
+  // S3-compatible object storage). "drive" rows are from the retired Google
+  // Drive uploader. Existing rows are local.
   destination String  @default("local")
-  // Set for Drive backups: the Drive file id and its browser link.
+  // Set for s3 backups: the object key inside S3_BUCKET.
+  objectKey   String?
+  // Legacy: set only on old Drive backups.
   driveFileId String?
   driveLink   String?
 

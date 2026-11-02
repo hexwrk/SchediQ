@@ -577,18 +577,20 @@ export interface BackupLogEntry {
   filename: string;
   sizeBytes: number;
   actorEmail: string;
-  destination: "local" | "drive";
-  driveFileId: string | null;
-  driveLink: string | null;
+  // "drive" only on rows from the retired Google Drive uploader.
+  destination: "local" | "s3" | "drive";
+  objectKey: string | null;
 }
 
-export interface DriveBackupResult {
+export interface CloudBackupResult {
   format: "sql" | "json";
   filename: string;
   sizeBytes: number;
   rawBytes: number;
-  driveFileId: string;
-  driveLink: string;
+  objectKey: string;
+  // Presigned download link, valid until downloadExpiresAt (~1 hour).
+  downloadUrl: string;
+  downloadExpiresAt: string;
   fallbackReason?: string;
   createdAt: string;
 }
@@ -602,8 +604,8 @@ export interface AdminStats {
   lastRestore: BackupLogEntry | null;
   // In-app backup is a local/demo feature; production backups are Neon's.
   backup: { enabled: boolean; message: string | null; pgDumpAvailable: boolean };
-  // Off-site backup to Google Drive. Never carries any credential, only flags.
-  drive: { configured: boolean; scheduled: boolean; lastBackup: BackupLogEntry | null };
+  // Off-site backup to S3-compatible storage. Never carries any credential, only flags.
+  cloud: { configured: boolean; scheduled: boolean; lastBackup: BackupLogEntry | null };
   generatedAt: string;
 }
 
@@ -637,8 +639,8 @@ export const adminApi = {
   stats: (token: string) => request<AdminStats>("/api/admin/stats", { token }),
   dataModel: (token: string) => request<DataModel>("/api/admin/data-model", { token }),
   backup: (token: string) => requestFile("/api/admin/backup", token, { method: "POST" }),
-  // Off-site: the server uploads a gzipped full dump to Google Drive and returns its link.
-  driveBackup: (token: string) => request<DriveBackupResult>("/api/admin/backup/drive", { method: "POST", token }),
+  // Off-site: the server uploads a gzipped full dump to object storage and returns a presigned link.
+  cloudBackup: (token: string) => request<CloudBackupResult>("/api/admin/backup/cloud", { method: "POST", token }),
   restore: (token: string, file: File) => {
     const form = new FormData();
     form.append("confirm", "RESTORE");

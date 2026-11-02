@@ -1,12 +1,13 @@
 import cron, { ScheduledTask } from "node-cron";
-import { createDriveBackup } from "./backup";
-import { driveConfigured, env } from "./env";
-import { DriveError } from "./googleDrive";
+import { createCloudBackup } from "./backup";
+import { env, storageConfigured } from "./env";
+import { StorageError } from "./objectStorage";
 
-// Optional automatic Drive backup. Off unless BOTH Google Drive is configured
-// and BACKUP_SCHEDULE is set, so a fresh install never schedules anything.
+// Optional automatic cloud backup. Off unless BOTH object storage is
+// configured and BACKUP_SCHEDULE is set, so a fresh install never schedules
+// anything.
 //
-// Caveats (also in docs/GOOGLE_DRIVE_BACKUP.md): the job runs inside the API
+// Caveats (also in docs/CLOUD_BACKUP.md): the job runs inside the API
 // process, so a host that sleeps when idle (Render free tier) skips runs while
 // asleep, and N API instances would each run it. For one small instance that
 // trade-off is fine; at scale use an external scheduler hitting the endpoint.
@@ -22,8 +23,8 @@ let running = false;
 export function startBackupSchedule(): ScheduledTask | null {
   const raw = env().BACKUP_SCHEDULE;
   if (!raw) return null;
-  if (!driveConfigured()) {
-    console.warn("[backup] BACKUP_SCHEDULE is set but Google Drive is not configured; scheduled backups are off.");
+  if (!storageConfigured()) {
+    console.warn("[backup] BACKUP_SCHEDULE is set but cloud storage (S3_*) is not configured; scheduled backups are off.");
     return null;
   }
   const expression = scheduleExpression(raw);
@@ -32,17 +33,18 @@ export function startBackupSchedule(): ScheduledTask | null {
     if (running) return;
     running = true;
     try {
-      const r = await createDriveBackup("scheduled-backup");
-      console.log(`[backup] Scheduled Drive backup uploaded: ${r.filename} (${r.sizeBytes} bytes)`);
+      const r = await createCloudBackup("scheduled-backup");
+      // Key and size only: the presigned URL is a bearer link and stays out of logs.
+      console.log(`[backup] Scheduled cloud backup uploaded: ${r.objectKey} (${r.sizeBytes} bytes)`);
     } catch (err) {
-      // DriveError messages are already safe; anything else is logged as its
+      // StorageError messages are already safe; anything else is logged as its
       // message only (never the object, which may carry request config).
-      const message = err instanceof DriveError ? err.message : err instanceof Error ? err.message : String(err);
-      console.error(`[backup] Scheduled Drive backup failed: ${message}`);
+      const message = err instanceof StorageError ? err.message : err instanceof Error ? err.message : String(err);
+      console.error(`[backup] Scheduled cloud backup failed: ${message}`);
     } finally {
       running = false;
     }
   });
-  console.log(`[backup] Scheduled Drive backups enabled (${expression}, server time).`);
+  console.log(`[backup] Scheduled cloud backups enabled (${expression}, server time).`);
   return task;
 }

@@ -96,18 +96,16 @@ const schema = z.object({
   BACKUP_MODE: z.enum(["auto", "json"]).default("auto"),
   PG_DUMP_PATH: optionalString,
   PSQL_PATH: optionalString,
-  // Off-site backup to Google Drive (OAuth2, drive.file scope). All three of
-  // ID/secret/refresh token are needed; with any missing, Drive backup is
-  // simply off (see driveConfigured). The secret and refresh token are never
-  // logged or returned by the API.
-  GOOGLE_DRIVE_CLIENT_ID: optionalString,
-  GOOGLE_DRIVE_CLIENT_SECRET: optionalString,
-  GOOGLE_DRIVE_REFRESH_TOKEN: optionalString,
-  // Optional target folder. Must be one the app created (drive.file cannot
-  // see folders made in the Drive UI); otherwise the app uses its own
-  // "SchediQ Backups" folder.
-  GOOGLE_DRIVE_FOLDER_ID: optionalString,
-  // Automatic Drive backup: "daily" (03:00 server time) or a cron expression
+  // Off-site backup to S3-compatible object storage (Cloudflare R2, Backblaze
+  // B2, AWS S3, MinIO). All five are needed; with any missing, cloud backup is
+  // simply off (see storageConfigured). The secret key is never logged or
+  // returned by the API.
+  S3_ENDPOINT: optionalString.refine((v) => v === undefined || /^https?:\/\//.test(v), "must be an http(s):// URL"),
+  S3_REGION: optionalString,
+  S3_BUCKET: optionalString,
+  S3_ACCESS_KEY_ID: optionalString,
+  S3_SECRET_ACCESS_KEY: optionalString,
+  // Automatic cloud backup: "daily" (03:00 server time) or a cron expression
   // such as "0 */6 * * *". Unset = manual only.
   BACKUP_SCHEDULE: optionalString.refine(
     (v) => v === undefined || v.toLowerCase() === "daily" || validCron(v),
@@ -162,11 +160,11 @@ export function loadEnv(): Env {
   }
 }
 
-// True only when every credential Drive needs is present. A half-filled set
-// (e.g. no refresh token yet) is treated as "not configured", never an error,
-// so the rest of the API boots normally.
-export function driveConfigured(e: Env = env()): boolean {
-  return !!(e.GOOGLE_DRIVE_CLIENT_ID && e.GOOGLE_DRIVE_CLIENT_SECRET && e.GOOGLE_DRIVE_REFRESH_TOKEN);
+// True only when every value object storage needs is present. A half-filled
+// set is treated as "not configured", never an error, so the rest of the API
+// boots normally.
+export function storageConfigured(e: Env = env()): boolean {
+  return !!(e.S3_ENDPOINT && e.S3_REGION && e.S3_BUCKET && e.S3_ACCESS_KEY_ID && e.S3_SECRET_ACCESS_KEY);
 }
 
 export function appUrl(): string {

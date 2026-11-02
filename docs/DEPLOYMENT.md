@@ -104,11 +104,12 @@ every problem, with no secrets printed.
 | `DEMO_MODE` | `false` |
 | `CORS_ORIGIN` | `http://localhost:3000` for now (replaced in step 4) |
 | `APP_URL` | optional; defaults to the first `CORS_ORIGIN` (used in reset links) |
-| `GOOGLE_DRIVE_CLIENT_ID` | optional; off-site backup to Google Drive (`docs/GOOGLE_DRIVE_BACKUP.md`) |
-| `GOOGLE_DRIVE_CLIENT_SECRET` | optional; secret, set in Render only |
-| `GOOGLE_DRIVE_REFRESH_TOKEN` | optional; secret, set in Render only |
-| `GOOGLE_DRIVE_FOLDER_ID` | optional; a folder the app created, otherwise it uses "SchediQ Backups" |
-| `BACKUP_SCHEDULE` | optional; `daily` or a cron expression (needs the three Drive vars) |
+| `S3_ENDPOINT` | optional; off-site backup to S3-compatible storage (`docs/CLOUD_BACKUP.md`) |
+| `S3_REGION` | optional; `auto` for R2, e.g. `us-west-004` for B2 |
+| `S3_BUCKET` | optional; private bucket for backups |
+| `S3_ACCESS_KEY_ID` | optional; key scoped to that bucket |
+| `S3_SECRET_ACCESS_KEY` | optional; secret, set in Render only |
+| `BACKUP_SCHEDULE` | optional; `daily` or a cron expression (needs all five `S3_*` vars) |
 
 Leave `PORT` unset. Render injects it, and the API listens on it.
 

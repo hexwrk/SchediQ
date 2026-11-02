@@ -517,26 +517,27 @@ existing Delete on each row works on the filtered results and still asks for
 confirmation (Tasks/Subjects/Courses: a confirm dialog; Users: type the
 account's email).
 
-## 23. Off-site backup to Google Drive
+## 23. Off-site backup to cloud storage (S3-compatible)
 
-**System & backup > Back up to Google Drive** uploads a gzipped full-system dump
-to the admin's Google Drive and shows the link. Setup (Google Cloud project,
-consent screen, OAuth Playground refresh token, env vars) is in
-`docs/GOOGLE_DRIVE_BACKUP.md`. Env vars, all optional:
+**System & backup > Back up to cloud (off-site)** uploads a gzipped full-system
+dump to an S3-compatible bucket (Cloudflare R2, Backblaze B2, AWS S3, MinIO)
+under `backups/` and shows a presigned download link valid for about an hour.
+Provider setup is in `docs/CLOUD_BACKUP.md`. Env vars, all optional:
 
 ```
-GOOGLE_DRIVE_CLIENT_ID=
-GOOGLE_DRIVE_CLIENT_SECRET=
-GOOGLE_DRIVE_REFRESH_TOKEN=
-GOOGLE_DRIVE_FOLDER_ID=        # optional, must be a folder the app created
+S3_ENDPOINT=
+S3_REGION=
+S3_BUCKET=
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
 BACKUP_SCHEDULE=               # optional: daily, or a cron expression
 ```
 
-Drive backup is on only when the first three are all set (`driveConfigured()`
-in `env.ts`); otherwise the page shows "Configure Google Drive backup" and
-`POST /api/admin/backup/drive` returns `409 DRIVE_NOT_CONFIGURED`. Each upload is
-logged in `BackupLog` (`destination = drive`, Drive file id and link). A
-downloaded `.sql.gz` / `.json.gz` can be uploaded on the Restore form as is.
+Cloud backup is on only when all five `S3_*` are set (`storageConfigured()` in
+`env.ts`); otherwise the page shows "Configure cloud backup" and
+`POST /api/admin/backup/cloud` returns `409 STORAGE_NOT_CONFIGURED`. Each upload
+is logged in `BackupLog` (`destination = s3`, object key). A downloaded
+`.sql.gz` / `.json.gz` can be uploaded on the Restore form as is.
 
 ## Production build check
 

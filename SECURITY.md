@@ -174,14 +174,15 @@ Every query for user data is scoped to the authenticated user:
 - In production (`DEMO_MODE=false`, or a production host without `pg_dump`)
   both endpoints return `409 BACKUP_DISABLED` and the UI explains that Neon
   manages backups, so no database dump can be pulled through the web app.
-- **Off-site Google Drive backup** (`POST /api/admin/backup/drive`, super admin
+- **Off-site cloud backup** (`POST /api/admin/backup/cloud`, super admin
   only) works in production too, but the dump goes straight from the API to
-  the configured Drive, never to a browser. OAuth2 with the `drive.file` scope,
-  so the app can only touch files it created. The client secret and refresh
-  token are env-only, never logged or returned (the UI only gets a
-  configured flag), and Drive error logs redact token/secret patterns and never
-  print the request config (which holds the Authorization header). Restore
-  accepts `.gz` with a 256 MB unpacked cap against decompression bombs.
+  the configured S3-compatible bucket, never through the API response. The
+  browser gets only a presigned GET link valid for one hour (sent with
+  `Cache-Control: no-store`, never stored or logged). The access key pair is
+  env-only, never logged or returned (the UI only gets a configured flag), and
+  storage error logs redact SigV4 signatures, access key IDs and the secret.
+  Scope the key to the one backup bucket. Restore accepts `.gz` with a 256 MB
+  unpacked cap against decompression bombs.
 
 ## 8. Account tiers
 

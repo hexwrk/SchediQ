@@ -3,7 +3,7 @@ import { promisify } from "util";
 import { gunzip, gzip } from "zlib";
 import { z } from "zod";
 import { env } from "./env";
-import { uploadToDrive } from "./googleDrive";
+import { uploadBackupObject } from "./objectStorage";
 import { prisma } from "./prisma";
 
 // System backup / restore for the super-admin System page.
@@ -225,34 +225,39 @@ export async function createBackup(now = new Date()): Promise<BackupFile> {
   };
 }
 
-// ---------- Off-site: Google Drive ----------
+// ---------- Off-site: S3-compatible object storage ----------
 
-export interface DriveBackupResult {
+export interface CloudBackupResult {
   format: BackupFormat;
   filename: string;
   sizeBytes: number;
   rawBytes: number;
-  driveFileId: string;
-  driveLink: string;
+  objectKey: string;
+  // Presigned GET, valid for PRESIGN_TTL_SECONDS. Never stored: it is a
+  // bearer link to a file holding password hashes.
+  downloadUrl: string;
+  downloadExpiresAt: Date;
   fallbackReason?: string;
   createdAt: Date;
 }
 
 // Full-system dump (same pg_dump / JSON-fallback path as the local download),
-// gzipped, uploaded to Drive and logged. Used by the admin button and the
-// optional schedule. Deliberately NOT gated by DEMO_MODE like the local
+// gzipped, uploaded under backups/ and logged. Used by the admin button and
+// the optional schedule. Deliberately NOT gated by DEMO_MODE like the local
 // download: production is exactly where an off-site copy matters, and the
-// file only ever goes to the admin's own Drive, never to a browser.
-export async function createDriveBackup(actorEmail: string, now = new Date()): Promise<DriveBackupResult> {
+// file only goes to the operator's own bucket.
+export async function createCloudBackup(actorEmail: string, now = new Date()): Promise<CloudBackupResult> {
   const backup = await createBackup(now);
   // SQL dumps compress ~5-10x; level 9 costs little at this size.
   const gz = await gzipAsync(backup.data, { level: 9 });
   const filename = `${backup.filename}.gz`;
-  const upload = await uploadToDrive({
+  const upload = await uploadBackupObject({
     name: filename,
-    mimeType: "application/gzip",
+    contentType: "application/gzip",
     data: gz,
-    description: `SchediQ full-system backup (${backup.format === "sql" ? "pg_dump SQL" : "JSON export"}), created ${now.toISOString()} by ${actorEmail}.`,
+    // Object metadata travels as x-amz-meta-* headers: ASCII only, so the
+    // actor email is left out (it is in BackupLog).
+    metadata: { format: backup.format, "created-at": now.toISOString() },
   });
   // Logged AFTER the dump (like the local backup), so the upload's own log row
   // is not inside the file.
@@ -263,9 +268,8 @@ export async function createDriveBackup(actorEmail: string, now = new Date()): P
       filename,
       sizeBytes: gz.length,
       actorEmail,
-      destination: "drive",
-      driveFileId: upload.id,
-      driveLink: upload.webViewLink,
+      destination: "s3",
+      objectKey: upload.key,
     },
   });
   return {
@@ -273,8 +277,9 @@ export async function createDriveBackup(actorEmail: string, now = new Date()): P
     filename,
     sizeBytes: gz.length,
     rawBytes: backup.data.length,
-    driveFileId: upload.id,
-    driveLink: upload.webViewLink,
+    objectKey: upload.key,
+    downloadUrl: upload.downloadUrl,
+    downloadExpiresAt: upload.expiresAt,
     fallbackReason: backup.fallbackReason,
     createdAt: log.createdAt,
   };
@@ -374,7 +379,7 @@ async function restoreJson(data: Buffer): Promise<void> {
 // irreversible: every user, task and session not in the file is gone.
 export async function restoreBackup(filename: string, data: Buffer): Promise<BackupFormat> {
   let lower = filename.toLowerCase();
-  // A .sql.gz / .json.gz downloaded from the Drive backup folder. The output
+  // A .sql.gz / .json.gz downloaded from the backup bucket. The output
   // cap stops a small "zip bomb" upload from inflating to gigabytes in memory.
   if (lower.endsWith(".gz")) {
     try {

@@ -13,7 +13,7 @@ const server = app.listen(config.PORT, () => {
   console.log(`SchediQ API listening on :${config.PORT} (${config.NODE_ENV}, AI_PARSER=${config.AI_PARSER}, DEMO_MODE=${config.DEMO_MODE})`);
 });
 
-// No-op unless Google Drive AND BACKUP_SCHEDULE are both configured.
+// No-op unless cloud storage (S3_*) AND BACKUP_SCHEDULE are both configured.
 const backupTask = startBackupSchedule();
 
 // Render sends SIGTERM on every deploy/restart: stop taking connections, let

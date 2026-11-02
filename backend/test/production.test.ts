@@ -1,8 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { EnvError, driveConfigured, parseEnv } from "../src/lib/env";
+import { EnvError, parseEnv, storageConfigured } from "../src/lib/env";
 import { DAILY_CRON, scheduleExpression } from "../src/lib/backupSchedule";
-import { driveErrorMessage, logDriveFailure } from "../src/lib/googleDrive";
+import { BACKUP_PREFIX, PRESIGN_TTL_SECONDS, logStorageFailure, storageErrorMessage } from "../src/lib/objectStorage";
 import { logAiFailure } from "../src/lib/openai";
 import { temporaryPassword } from "../src/controllers/admin.controller";
 import { validatePassword } from "../../shared/validation";
@@ -107,18 +107,27 @@ describe("admin temporary password", () => {
   });
 });
 
-describe("Google Drive backup config", () => {
-  const drive = {
-    GOOGLE_DRIVE_CLIENT_ID: "id.apps.googleusercontent.com",
-    GOOGLE_DRIVE_CLIENT_SECRET: "GOCSPX-secretvalue",
-    GOOGLE_DRIVE_REFRESH_TOKEN: "1//refreshtokenvalue",
+describe("Cloud (S3-compatible) backup config", () => {
+  const s3 = {
+    S3_ENDPOINT: "https://abc123.r2.cloudflarestorage.com",
+    S3_REGION: "auto",
+    S3_BUCKET: "schediq-backups",
+    S3_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE",
+    S3_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
   };
-  it("is configured only when all three credentials are set", () => {
-    assert.equal(driveConfigured(parseEnv(base)), false);
-    assert.equal(driveConfigured(parseEnv({ ...base, ...drive })), true);
-    for (const key of Object.keys(drive)) {
-      assert.equal(driveConfigured(parseEnv({ ...base, ...drive, [key]: "" })), false, key);
+  it("is configured only when all five values are set", () => {
+    assert.equal(storageConfigured(parseEnv(base)), false);
+    assert.equal(storageConfigured(parseEnv({ ...base, ...s3 })), true);
+    for (const key of Object.keys(s3)) {
+      assert.equal(storageConfigured(parseEnv({ ...base, ...s3, [key]: "" })), false, key);
     }
+  });
+  it("rejects an S3_ENDPOINT that is not a URL", () => {
+    failsWith({ ...base, ...s3, S3_ENDPOINT: "r2.cloudflarestorage.com" }, /S3_ENDPOINT/);
+  });
+  it("stores under backups/ with a ~1 hour download link", () => {
+    assert.equal(BACKUP_PREFIX, "backups/");
+    assert.equal(PRESIGN_TTL_SECONDS, 3600);
   });
   it("validates BACKUP_SCHEDULE as daily or a cron expression", () => {
     assert.equal(parseEnv({ ...base, BACKUP_SCHEDULE: "daily" }).BACKUP_SCHEDULE, "daily");
@@ -127,27 +136,32 @@ describe("Google Drive backup config", () => {
     assert.equal(scheduleExpression("Daily"), DAILY_CRON);
     assert.equal(scheduleExpression(" 0 1 * * * "), "0 1 * * *");
   });
-  it("maps Google errors to actionable messages without echoing them", () => {
-    assert.match(driveErrorMessage({ response: { status: 400, data: { error: "invalid_grant" } } }), /refresh token/);
-    assert.match(driveErrorMessage({ response: { status: 401, data: { error: "invalid_client" } } }), /client ID or secret/);
-    assert.match(driveErrorMessage({ status: 403 }), /403/);
-    assert.match(driveErrorMessage({ status: 503 }), /unavailable/);
+  it("maps provider errors to actionable messages without echoing them", () => {
+    assert.match(storageErrorMessage({ name: "InvalidAccessKeyId", $metadata: { httpStatusCode: 403 } }), /access key/);
+    assert.match(storageErrorMessage({ name: "SignatureDoesNotMatch" }), /access key/);
+    assert.match(storageErrorMessage({ name: "NoSuchBucket", $metadata: { httpStatusCode: 404 } }), /S3_BUCKET/);
+    assert.match(storageErrorMessage({ name: "AccessDenied", $metadata: { httpStatusCode: 403 } }), /403/);
+    assert.match(storageErrorMessage({ $metadata: { httpStatusCode: 503 } }), /unavailable/);
   });
-  it("never logs tokens or secrets", () => {
+  it("never logs keys or signatures", () => {
     const lines: string[] = [];
     const original = console.error;
+    const originalSecret = process.env.S3_SECRET_ACCESS_KEY;
+    process.env.S3_SECRET_ACCESS_KEY = s3.S3_SECRET_ACCESS_KEY;
     console.error = (...args: unknown[]) => lines.push(args.join(" "));
     try {
-      logDriveFailure("upload", {
-        status: 401,
-        message: "bad Authorization: Bearer ya29.a0AfH6abc refresh 1//0gXYZ secret GOCSPX-abc123",
-        config: { headers: { Authorization: "Bearer ya29.a0AfH6abc" } },
+      logStorageFailure("upload", {
+        name: "SignatureDoesNotMatch",
+        $metadata: { httpStatusCode: 403 },
+        message: `AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20261102/auto/s3/aws4_request, Signature=deadbeef01 key ${s3.S3_SECRET_ACCESS_KEY}`,
       });
     } finally {
       console.error = original;
+      if (originalSecret === undefined) delete process.env.S3_SECRET_ACCESS_KEY;
+      else process.env.S3_SECRET_ACCESS_KEY = originalSecret;
     }
     assert.equal(lines.length, 1);
-    for (const leak of ["ya29.a0AfH6abc", "1//0gXYZ", "GOCSPX-abc123"]) assert.ok(!lines[0].includes(leak), lines[0]);
-    assert.match(lines[0], /status=401/);
+    for (const leak of ["AKIAIOSFODNN7EXAMPLE", "deadbeef01", s3.S3_SECRET_ACCESS_KEY]) assert.ok(!lines[0].includes(leak), lines[0]);
+    assert.match(lines[0], /status=403/);
   });
 });

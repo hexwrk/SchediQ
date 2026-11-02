@@ -5,9 +5,9 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { validatePassword } from "../../../shared/validation";
 import { prisma } from "../lib/prisma";
-import { RestoreError, backupStatus, createBackup, createDriveBackup, restoreBackup } from "../lib/backup";
-import { driveConfigured, env } from "../lib/env";
-import { DriveError, DriveNotConfiguredError } from "../lib/googleDrive";
+import { RestoreError, backupStatus, createBackup, createCloudBackup, restoreBackup } from "../lib/backup";
+import { env, storageConfigured } from "../lib/env";
+import { StorageError, StorageNotConfiguredError } from "../lib/objectStorage";
 import { BCRYPT_ROUNDS } from "./auth.controller";
 
 // Super-admin module. Every route here is mounted behind requireAuth AND
@@ -206,8 +206,8 @@ export async function getStats(_req: Request, res: Response) {
       prisma.backupLog.findFirst({ where: { kind: "RESTORE" }, orderBy: { createdAt: "desc" } }),
       backupStatus(),
     ]);
-  const lastDriveBackup = await prisma.backupLog.findFirst({
-    where: { kind: "BACKUP", destination: "drive" },
+  const lastCloudBackup = await prisma.backupLog.findFirst({
+    where: { kind: "BACKUP", destination: "s3" },
     orderBy: { createdAt: "desc" },
   });
 
@@ -220,8 +220,8 @@ export async function getStats(_req: Request, res: Response) {
     lastBackup,
     lastRestore,
     backup,
-    // Booleans only: whether Drive is set up, never any of its values.
-    drive: { configured: driveConfigured(), scheduled: driveConfigured() && !!env().BACKUP_SCHEDULE, lastBackup: lastDriveBackup },
+    // Booleans only: whether storage is set up, never any of its values.
+    cloud: { configured: storageConfigured(), scheduled: storageConfigured() && !!env().BACKUP_SCHEDULE, lastBackup: lastCloudBackup },
     generatedAt: new Date().toISOString(),
   });
 }
@@ -262,27 +262,29 @@ export async function createBackupHandler(req: Request, res: Response) {
   return res.send(backup.data);
 }
 
-// POST /api/admin/backup/drive
-// Off-site backup: full dump, gzipped, uploaded to the admin's Google Drive.
-// Responds with the Drive link (the file itself never goes to the browser).
-export async function createDriveBackupHandler(req: Request, res: Response) {
-  if (!driveConfigured()) {
+// POST /api/admin/backup/cloud
+// Off-site backup: full dump, gzipped, uploaded to S3-compatible storage.
+// Responds with the object key and a presigned download link (~1 hour); the
+// file itself never passes through the API response.
+export async function createCloudBackupHandler(req: Request, res: Response) {
+  if (!storageConfigured()) {
     return res.status(409).json({
-      error: "Google Drive backup is not configured on the server. Set the GOOGLE_DRIVE_* variables (see docs/GOOGLE_DRIVE_BACKUP.md).",
-      code: "DRIVE_NOT_CONFIGURED",
+      error: "Cloud backup is not configured on the server. Set the S3_* variables (see docs/CLOUD_BACKUP.md).",
+      code: "STORAGE_NOT_CONFIGURED",
     });
   }
   try {
-    const result = await createDriveBackup(await actorEmail(req.userId));
+    const result = await createCloudBackup(await actorEmail(req.userId));
+    // The presigned URL is a bearer link: keep it out of every cache.
     res.setHeader("Cache-Control", "no-store");
     return res.status(201).json(result);
   } catch (err) {
-    if (err instanceof DriveNotConfiguredError) {
-      return res.status(409).json({ error: err.message, code: "DRIVE_NOT_CONFIGURED" });
+    if (err instanceof StorageNotConfiguredError) {
+      return res.status(409).json({ error: err.message, code: "STORAGE_NOT_CONFIGURED" });
     }
-    // 502: the dump worked, the upstream (Google) did not.
-    if (err instanceof DriveError) {
-      return res.status(502).json({ error: err.message, code: "DRIVE_UPLOAD_FAILED" });
+    // 502: the dump worked, the upstream (storage provider) did not.
+    if (err instanceof StorageError) {
+      return res.status(502).json({ error: err.message, code: "STORAGE_UPLOAD_FAILED" });
     }
     throw err;
   }
