@@ -20,7 +20,7 @@ export default function Home() {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-bg px-6 text-center">
-      <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-base font-bold text-white">
+      <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-base font-bold text-on-solid">
         SQ
       </span>
       <h1 className="text-3xl font-semibold tracking-tight">SchediQ</h1>
@@ -31,7 +31,7 @@ export default function Home() {
       <div className="flex gap-3">
         <Link
           href="/login"
-          className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-white hover:opacity-90"
+          className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-on-solid hover:opacity-90"
         >
           Log in
         </Link>

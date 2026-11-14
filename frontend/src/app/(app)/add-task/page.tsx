@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import {
   ApiError,
   CognitiveCategory,
@@ -14,23 +14,32 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { SparkIcon } from "@/lib/icons";
+import { toLocalInput } from "@/lib/dates";
+import { ErrorState } from "@/lib/states";
+import { useApi } from "@/lib/use-api";
+import { NUMBER_LIMITS, TITLE_MAX } from "@shared/validation";
+import {
+  FieldError,
+  FieldErrors,
+  TASK_FIELDS,
+  TaskField,
+  hasErrors,
+  inputClass,
+  serverFieldErrors,
+  validateTaskForm,
+} from "@/lib/form";
 
 const CATEGORIES: CognitiveCategory[] = ["Analytical", "Verbal", "Technical", "General"];
-
-// Convert an ISO string to the value a datetime-local input expects (local
-// time, no timezone suffix). Returns "" for null.
-function toLocalInput(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 export default function AddTaskPage() {
   const { token } = useAuth();
   const router = useRouter();
 
-  const [subjects, setSubjects] = useState<Subject[]>([]);
+  // Subjects only fill the dropdown; if they fail to load the form still works
+  // (task saved without a subject) and a warning with Retry is shown.
+  const subjectsQuery = useApi("subjects", (t) => subjectsApi.list(t).then((r) => r.subjects));
+  const [extraSubjects, setExtraSubjects] = useState<Subject[]>([]);
+  const subjects = [...(subjectsQuery.data ?? []), ...extraSubjects];
   const [text, setText] = useState("");
   const [parsing, setParsing] = useState(false);
   const [parseInfo, setParseInfo] = useState<ParsedTask | null>(null);
@@ -40,18 +49,15 @@ export default function AddTaskPage() {
   // Editable task fields (prefilled by the parser, overridable by the user).
   const [title, setTitle] = useState("");
   const [deadline, setDeadline] = useState("");
-  const [durationMin, setDurationMin] = useState(60);
+  // Raw input string; validated with validateIntInRange before saving.
+  const [durationMin, setDurationMin] = useState("60");
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors<TaskField>>({});
   const [priority, setPriority] = useState<TaskPriority>("MEDIUM");
   const [subjectId, setSubjectId] = useState("");
 
   // New-subject confirmation state (shown when the parser flags isNewSubject).
   const [pendingSubjectName, setPendingSubjectName] = useState("");
   const [pendingCategory, setPendingCategory] = useState<CognitiveCategory>("General");
-
-  useEffect(() => {
-    if (!token) return;
-    subjectsApi.list(token).then((r) => setSubjects(r.subjects)).catch(() => {});
-  }, [token]);
 
   async function onParse() {
     if (!token || !text.trim()) return;
@@ -62,7 +68,8 @@ export default function AddTaskPage() {
       setParseInfo(parsed);
       setTitle(parsed.title);
       setDeadline(toLocalInput(parsed.deadline));
-      setDurationMin(parsed.durationMin);
+      setDurationMin(String(parsed.durationMin));
+      setFieldErrors({});
       setPriority(parsed.priority);
       setSubjectId(parsed.subjectId ?? "");
       // If the parser invented a subject that doesn't exist yet, stage it for
@@ -88,7 +95,7 @@ export default function AddTaskPage() {
         name: pendingSubjectName,
         cognitiveCategory: pendingCategory,
       });
-      setSubjects((prev) => [...prev, subject]);
+      setExtraSubjects((prev) => [...prev, subject]);
       setSubjectId(subject.id);
       setPendingSubjectName("");
     } catch (err) {
@@ -103,11 +110,14 @@ export default function AddTaskPage() {
   async function onSave(e: FormEvent) {
     e.preventDefault();
     if (!token) return;
+    const found = validateTaskForm({ title, deadline, durationMin });
+    setFieldErrors(found);
+    if (hasErrors(found)) return;
     setSaving(true);
     setError(null);
     try {
       await tasksApi.create(token, {
-        title,
+        title: title.trim(),
         deadline: new Date(deadline).toISOString(),
         durationMin: Number(durationMin),
         priority,
@@ -115,7 +125,9 @@ export default function AddTaskPage() {
       });
       router.push("/tasks");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to save task");
+      const fromServer = serverFieldErrors(err, TASK_FIELDS);
+      setFieldErrors(fromServer);
+      if (!hasErrors(fromServer)) setError(err instanceof ApiError ? err.message : "Failed to save task");
     } finally {
       setSaving(false);
     }
@@ -138,14 +150,14 @@ export default function AddTaskPage() {
           onChange={(e) => setText(e.target.value)}
           rows={3}
           maxLength={500}
-          className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-primary"
+          className="w-full rounded-lg border border-input bg-surface px-3 py-2 text-sm outline-none focus:border-primary"
           placeholder="Finish calculus problem sheet 4, about 90 minutes, due next week"
         />
         <div className="mt-3 flex items-center gap-3">
           <button
             onClick={onParse}
             disabled={parsing || !text.trim()}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
           >
             <SparkIcon width={16} height={16} />
             {parsing ? "Parsing..." : "Parse task"}
@@ -157,6 +169,15 @@ export default function AddTaskPage() {
           )}
         </div>
       </div>
+
+      {subjectsQuery.error && (
+        <ErrorState
+          title="Couldn't load your subjects"
+          message={`${subjectsQuery.error} You can still save the task without a subject.`}
+          onRetry={subjectsQuery.reload}
+          retrying={subjectsQuery.reloading}
+        />
+      )}
 
       {/* New-subject confirmation */}
       {pendingSubjectName && (
@@ -170,7 +191,7 @@ export default function AddTaskPage() {
               <select
                 value={pendingCategory}
                 onChange={(e) => setPendingCategory(e.target.value as CognitiveCategory)}
-                className="rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+                className="rounded-lg border border-input bg-surface px-3 py-2 text-sm"
               >
                 {CATEGORIES.map((c) => (
                   <option key={c} value={c}>
@@ -181,7 +202,7 @@ export default function AddTaskPage() {
             </label>
             <button
               onClick={confirmNewSubject}
-              className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-on-solid hover:opacity-90"
             >
               Create subject
             </button>
@@ -196,41 +217,53 @@ export default function AddTaskPage() {
       )}
 
       {/* Editable task form */}
-      <form onSubmit={onSave} className="flex flex-col gap-4 rounded-card border border-border bg-surface p-5">
+      <form onSubmit={onSave} noValidate className="flex flex-col gap-4 rounded-card border border-border bg-surface p-5">
         <h2 className="text-sm font-semibold">Task details</h2>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm sm:col-span-2">
             Title
             <input
-              required
               value={title}
+              maxLength={TITLE_MAX + 20}
               onChange={(e) => setTitle(e.target.value)}
-              className="rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-primary"
+              aria-invalid={!!fieldErrors.title}
+              className={inputClass(fieldErrors.title)}
             />
+            <FieldError message={fieldErrors.title} />
           </label>
 
           <label className="flex flex-col gap-1 text-sm">
             Deadline
             <input
               type="datetime-local"
-              required
               value={deadline}
               onChange={(e) => setDeadline(e.target.value)}
-              className="rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-primary"
+              aria-invalid={!!fieldErrors.deadline}
+              className={inputClass(fieldErrors.deadline)}
             />
+            <FieldError message={fieldErrors.deadline} />
           </label>
 
           <label className="flex flex-col gap-1 text-sm">
             Duration (minutes)
             <input
               type="number"
-              min={5}
-              required
+              inputMode="numeric"
+              min={NUMBER_LIMITS.durationMin.min}
+              max={NUMBER_LIMITS.durationMin.max}
               value={durationMin}
-              onChange={(e) => setDurationMin(Number(e.target.value))}
-              className="rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-primary"
+              onChange={(e) => setDurationMin(e.target.value)}
+              aria-invalid={!!fieldErrors.durationMin}
+              className={inputClass(fieldErrors.durationMin)}
             />
+            {fieldErrors.durationMin ? (
+              <FieldError message={fieldErrors.durationMin} />
+            ) : (
+              <span className="text-xs text-text-muted">
+                {NUMBER_LIMITS.durationMin.min}-{NUMBER_LIMITS.durationMin.max} minutes
+              </span>
+            )}
           </label>
 
           <label className="flex flex-col gap-1 text-sm">
@@ -238,7 +271,7 @@ export default function AddTaskPage() {
             <select
               value={priority}
               onChange={(e) => setPriority(e.target.value as TaskPriority)}
-              className="rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-primary"
+              className="rounded-lg border border-input bg-surface px-3 py-2 outline-none focus:border-primary"
             >
               <option value="LOW">Low</option>
               <option value="MEDIUM">Medium</option>
@@ -251,7 +284,7 @@ export default function AddTaskPage() {
             <select
               value={subjectId}
               onChange={(e) => setSubjectId(e.target.value)}
-              className="rounded-lg border border-border bg-surface px-3 py-2 outline-none focus:border-primary"
+              className="rounded-lg border border-input bg-surface px-3 py-2 outline-none focus:border-primary"
             >
               <option value="">None</option>
               {subjects.map((s) => (
@@ -268,8 +301,8 @@ export default function AddTaskPage() {
         <div>
           <button
             type="submit"
-            disabled={saving || !title || !deadline}
-            className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            disabled={saving}
+            className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-on-solid hover:opacity-90 disabled:opacity-50"
           >
             {saving ? "Saving..." : "Save task"}
           </button>

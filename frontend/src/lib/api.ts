@@ -2,10 +2,41 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  // Per-field messages from the server's zod validation (400s), keyed by field.
+  fieldErrors: Record<string, string[]>;
+  // Machine-readable reason, e.g. "UPGRADE_REQUIRED" on a 402 tier cap.
+  code?: string;
+  constructor(message: string, status: number, fieldErrors: Record<string, string[]> = {}, code?: string) {
     super(message);
     this.status = status;
+    this.fieldErrors = fieldErrors;
+    this.code = code;
   }
+
+  // First server message for one field, for the "error under the input" slot.
+  field(name: string): string | undefined {
+    return this.fieldErrors[name]?.[0];
+  }
+
+  get upgradeRequired(): boolean {
+    return this.status === 402 && this.code === "UPGRADE_REQUIRED";
+  }
+}
+
+// Fired when an AUTHENTICATED request gets 401: the token expired or was
+// revoked server-side (password change elsewhere, admin reset, account
+// deleted). AuthProvider listens and signs this tab out. Unauthenticated
+// calls (login with a wrong password) never fire it.
+export const UNAUTHORIZED_EVENT = "schediq:unauthorized";
+
+function signalIfRevoked(status: number, token: string | null | undefined) {
+  if (status === 401 && token && typeof window !== "undefined") {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
+}
+
+function toApiError(body: { error?: string; code?: string; details?: { fieldErrors?: Record<string, string[]> } }, status: number) {
+  return new ApiError(body.error ?? "Request failed", status, body.details?.fieldErrors ?? {}, body.code);
 }
 
 async function request<T>(
@@ -30,16 +61,62 @@ async function request<T>(
   const body = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    throw new ApiError(body.error ?? "Request failed", res.status);
+    signalIfRevoked(res.status, token);
+    throw toApiError(body, res.status);
   }
 
   return body as T;
 }
 
+// Authenticated request whose response is a FILE (backup download). Returns the
+// blob and the server-chosen filename from Content-Disposition.
+async function requestFile(path: string, token: string, init: RequestInit = {}) {
+  const res = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${token}`, ...init.headers },
+  });
+  if (!res.ok) {
+    signalIfRevoked(res.status, token);
+    throw toApiError(await res.json().catch(() => ({})), res.status);
+  }
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "schediq-backup";
+  return {
+    blob: await res.blob(),
+    filename,
+    format: res.headers.get("X-Backup-Format"),
+    fallback: res.headers.get("X-Backup-Fallback"),
+  };
+}
+
+// Multipart upload. No Content-Type header: the browser sets the boundary.
+async function requestUpload<T>(path: string, token: string, form: FormData): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    body: form,
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    signalIfRevoked(res.status, token);
+    throw toApiError(body, res.status);
+  }
+  return body as T;
+}
+
+export type Role = "USER" | "SUPER_ADMIN";
+export type AccountType = "FREE" | "PREMIUM";
+
 export interface AuthUser {
   id: string;
   email: string;
-  name: string | null;
+  // Public handle (normalised lower-case). Login is still by email.
+  username: string;
+  name: string;
+  role: Role;
+  accountType: AccountType;
+  // An admin issued a temporary password; the app asks for a new one.
+  mustChangePassword: boolean;
 }
 
 export interface AuthResponse {
@@ -48,21 +125,49 @@ export interface AuthResponse {
 }
 
 export const authApi = {
-  register: (email: string, password: string, name?: string) =>
+  register: (email: string, username: string, password: string, name: string) =>
     request<AuthResponse>("/api/auth/register", {
       method: "POST",
-      body: JSON.stringify({ email, password, name }),
+      body: JSON.stringify({ email, username, password, name }),
     }),
+  // Live availability for the register form; format problems come back as reasons.
+  usernameAvailable: (username: string, signal?: AbortSignal) =>
+    request<{ username: string; available: boolean; reasons: string[] }>(
+      `/api/auth/username-available?username=${encodeURIComponent(username)}`,
+      { signal }
+    ),
   login: (email: string, password: string) =>
     request<AuthResponse>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
   me: (token: string) => request<{ user: AuthUser }>("/api/auth/me", { token }),
+  // Always resolves with the same generic message (no account enumeration).
+  // In demo mode the response also carries the reset link, since no email is sent.
+  forgot: (email: string) =>
+    request<{ message: string; demo?: boolean; resetUrl?: string; expiresInMinutes?: number }>("/api/auth/forgot", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  reset: (token: string, password: string) =>
+    request<{ message: string }>("/api/auth/reset", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
+    }),
 };
 
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH";
-export type TaskStatus = "PENDING" | "SCHEDULED" | "DONE";
+export type TaskStatus = "PENDING" | "SCHEDULED" | "IN_PROGRESS" | "DONE";
+
+// Derived server-side from the task's study sessions (single source of truth).
+export interface TaskProgress {
+  totalMin: number;
+  completedMin: number;
+  percent: number;
+  sessionsTotal: number;
+  sessionsDone: number;
+  nextSessionAt: string | null;
+}
 
 export interface Subject {
   id: string;
@@ -73,6 +178,7 @@ export interface Subject {
 
 export interface Task {
   id: string;
+  lessonId?: string | null;
   title: string;
   deadline: string;
   durationMin: number;
@@ -80,6 +186,7 @@ export interface Task {
   status: TaskStatus;
   subjectId: string | null;
   subject: Subject | null;
+  progress: TaskProgress;
 }
 
 export interface TaskInput {
@@ -164,16 +271,37 @@ export interface StudySession {
   id: string;
   startsAt: string;
   endsAt: string;
+  completedAt: string | null;
   taskId: string;
   task: Task;
 }
 
+// A task the scheduler could not place cleanly, with the reason to show.
+export interface ScheduleIssue {
+  taskId: string;
+  title: string;
+  kind: "OVERDUE" | "AT_RISK" | "UNSCHEDULED";
+  reason: string;
+  unplacedMin: number;
+  deadline: string;
+}
+
+export interface ScheduleResponse {
+  sessions: StudySession[];
+  issues: ScheduleIssue[];
+}
+
 export const sessionsApi = {
-  list: (token: string) =>
-    request<{ sessions: StudySession[] }>("/api/sessions", { token }),
+  list: (token: string) => request<ScheduleResponse>("/api/sessions", { token }),
   generate: (token: string) =>
-    request<{ sessions: StudySession[] }>("/api/sessions/generate", {
+    request<ScheduleResponse>("/api/sessions/generate", {
       method: "POST",
+      token,
+    }),
+  toggle: (token: string, id: string, completed: boolean) =>
+    request<{ session: StudySession }>(`/api/sessions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ completed }),
       token,
     }),
 };
@@ -198,4 +326,325 @@ export const aiApi = {
       body: JSON.stringify({ text }),
       token,
     }),
+};
+
+// Gamification. All fields are DERIVED server-side from completed sessions.
+export interface LevelProgress {
+  level: number;
+  intoLevel: number;
+  toNext: number;
+  span: number;
+}
+
+export interface Badge {
+  key: string;
+  label: string;
+  description: string;
+  unlocked: boolean;
+}
+
+export interface LeaderboardEntry {
+  id: string;
+  name: string;
+  xp: number;
+  level: number;
+  rank: number;
+  isCurrentUser: boolean;
+}
+
+export type XpSource = "session" | "focus_bonus" | "lesson" | "quiz" | "active_day" | "course";
+
+export interface XpEvent {
+  source: XpSource;
+  amount: number;
+  at: string;
+  label: string;
+}
+
+export interface Progress {
+  xp: number;
+  level: number;
+  levelTitle: string;
+  levelProgress: LevelProgress;
+  streak: number;
+  badges: Badge[];
+  breakdown: Record<XpSource, number>;
+  xpRules: {
+    values: Record<string, number>;
+    sources: { source: XpSource; label: string; howTo: string; amount: string }[];
+  };
+  recentEvents: XpEvent[];
+  xpByDay: { date: string; xp: number }[];
+  leaderboard: LeaderboardEntry[];
+  rank: number | null;
+  totalUsers: number;
+}
+
+export interface SubjectMastery {
+  subjectId: string;
+  name: string;
+  colorTag: string;
+  mastery: number;
+  changeThisWeek: number;
+  components: { lessons: number | null; quizzes: number | null; study: number | null };
+}
+
+export interface CourseCard {
+  id: string;
+  title: string;
+  topic: string;
+  level: string;
+  subject: { id: string; name: string; colorTag: string } | null;
+  lessonsDone: number;
+  lessonsTotal: number;
+  completed: boolean;
+}
+
+export interface Overview {
+  counts: { subjects: number; tasks: number; courses: number; sessions: number };
+  week: {
+    start: string;
+    studyMinutes: number;
+    lessonsCompleted: number;
+    quizzesPassed: number;
+    xpEarned: number;
+    streak: number;
+    level: number;
+    levelTitle: string;
+    xp: number;
+  };
+  mastery: SubjectMastery[];
+  masteryWeights: { lessons: number; quizzes: number; study: number };
+  courses: CourseCard[];
+  trend: { date: string; xp: number; studyMinutes: number }[];
+}
+
+export const progressApi = {
+  get: (token: string) => request<Progress>("/api/progress", { token }),
+  overview: (token: string) => request<Overview>("/api/progress/overview", { token }),
+};
+
+// ---------- Account / tier ----------
+
+export interface Usage {
+  used: number;
+  limit: number | null; // null = unlimited (PREMIUM)
+  remaining: number | null;
+}
+
+export const accountApi = {
+  get: (token: string) =>
+    request<{ user: AuthUser; usage: { aiParses: Usage } }>("/api/account", { token }),
+  // Demo upgrade: flips the tier, no payment.
+  // Permanently deletes the caller's own account (re-authenticated by password).
+  remove: (token: string, password: string) =>
+    request<void>("/api/account", {
+      method: "DELETE",
+      body: JSON.stringify({ password, confirm: "DELETE" }),
+      token,
+    }),
+  // Self-service password change; also clears an admin-issued temporary password.
+  changePassword: (token: string, currentPassword: string, newPassword: string) =>
+    // Returns a NEW token: the server revokes all older ones (other devices).
+    request<{ token: string; user: AuthUser; message: string }>("/api/account/password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
+      token,
+    }),
+  setTier: (token: string, accountType: AccountType) =>
+    request<{ user: AuthUser; usage: { aiParses: Usage } }>("/api/account/tier", {
+      method: "PATCH",
+      body: JSON.stringify({ accountType }),
+      token,
+    }),
+};
+
+// ---------- Courses ----------
+
+export type CourseLevel = "BEGINNER" | "INTERMEDIATE" | "ADVANCED";
+
+export interface QuizQuestion {
+  question: string;
+  options: string[];
+  // Only present after the learner has submitted the quiz once.
+  answerIndex?: number;
+}
+
+export interface Lesson {
+  id: string;
+  order: number;
+  title: string;
+  content: string;
+  keyPoints: string[];
+  quiz: QuizQuestion[];
+  completedAt: string | null;
+  quizScore: number | null;
+  quizPassedAt: string | null;
+  courseId: string;
+  task?: { id: string; status: TaskStatus } | null;
+}
+
+export interface CourseProgress {
+  lessonsDone: number;
+  lessonsTotal: number;
+  percent: number;
+  avgQuizScore: number | null;
+  completed: boolean;
+}
+
+export interface Course {
+  id: string;
+  title: string;
+  topic: string;
+  level: CourseLevel;
+  description: string;
+  source: "AI" | "SEED";
+  createdAt: string;
+  scheduledAt: string | null;
+  subjectId: string | null;
+  subject: { id: string; name: string; colorTag: string } | null;
+  progress: CourseProgress;
+}
+
+export interface CourseDetail extends Course {
+  lessons: Lesson[];
+}
+
+export interface CourseInput {
+  topic: string;
+  level: CourseLevel;
+  lessonCount: number;
+  subjectId?: string | null;
+}
+
+export interface QuizResult {
+  score: number;
+  passed: boolean;
+  correct: boolean[];
+  answerKey: number[];
+}
+
+export const coursesApi = {
+  list: (token: string) => request<{ courses: Course[]; usage: Usage }>("/api/courses", { token }),
+  get: (token: string, id: string) => request<{ course: CourseDetail }>(`/api/courses/${id}`, { token }),
+  generate: (token: string, data: CourseInput) =>
+    request<{ course: CourseDetail; fallback: boolean; usage: Usage }>("/api/courses/generate", {
+      method: "POST",
+      body: JSON.stringify(data),
+      token,
+    }),
+  link: (token: string, id: string, subjectId: string | null) =>
+    request<{ course: Course }>(`/api/courses/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ subjectId }),
+      token,
+    }),
+  remove: (token: string, id: string) => request<void>(`/api/courses/${id}`, { method: "DELETE", token }),
+  schedule: (token: string, id: string) =>
+    request<{ tasksCreated: number }>(`/api/courses/${id}/schedule`, { method: "POST", token }),
+};
+
+export const lessonsApi = {
+  update: (token: string, id: string, data: { completed?: boolean; quizAnswers?: number[] }) =>
+    request<{ lesson: Lesson; result: QuizResult | null }>(`/api/lessons/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+      token,
+    }),
+};
+
+// ---------- Super admin ----------
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  username: string;
+  name: string;
+  role: Role;
+  accountType: AccountType;
+  mustChangePassword: boolean;
+  createdAt: string;
+  taskCount: number;
+  subjectCount: number;
+  sessionCount: number;
+}
+
+export interface BackupLogEntry {
+  id: string;
+  createdAt: string;
+  kind: "BACKUP" | "RESTORE";
+  format: "sql" | "json";
+  filename: string;
+  sizeBytes: number;
+  actorEmail: string;
+  // "drive" only on rows from the retired Google Drive uploader.
+  destination: "local" | "s3" | "drive";
+  objectKey: string | null;
+}
+
+export interface CloudBackupResult {
+  format: "sql" | "json";
+  filename: string;
+  sizeBytes: number;
+  rawBytes: number;
+  objectKey: string;
+  // Presigned download link, valid until downloadExpiresAt (~1 hour).
+  downloadUrl: string;
+  downloadExpiresAt: string;
+  fallbackReason?: string;
+  createdAt: string;
+}
+
+export interface AdminStats {
+  counts: { users: number; tasks: number; sessions: number; completedSessions: number; subjects: number };
+  usersByRole: Partial<Record<Role, number>>;
+  usersByTier: Partial<Record<AccountType, number>>;
+  databaseSizeBytes: number;
+  lastBackup: BackupLogEntry | null;
+  lastRestore: BackupLogEntry | null;
+  // In-app backup is a local/demo feature; production backups are Neon's.
+  backup: { enabled: boolean; message: string | null; pgDumpAvailable: boolean };
+  // Off-site backup to S3-compatible storage. Never carries any credential, only flags.
+  cloud: { configured: boolean; scheduled: boolean; lastBackup: BackupLogEntry | null };
+  generatedAt: string;
+}
+
+export interface DataModel {
+  entities: { name: string; rows: number; purpose: string; relations: string[] }[];
+  flows: string[];
+  generatedAt: string;
+}
+
+export const adminApi = {
+  // Server-side search (name, email or username) so the list scales with sign-ups.
+  users: (token: string, q = "") =>
+    request<{ users: AdminUser[]; total: number; query: string }>(
+      `/api/admin/users${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""}`,
+      { token }
+    ),
+  updateUser: (token: string, id: string, data: { role?: Role; accountType?: AccountType }) =>
+    request<{ user: AuthUser }>(`/api/admin/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+      token,
+    }),
+  deleteUser: (token: string, id: string) =>
+    request<void>(`/api/admin/users/${id}`, { method: "DELETE", token }),
+  // Issues a one-time temporary password, returned ONCE in this response.
+  resetPassword: (token: string, id: string) =>
+    request<{ email: string; temporaryPassword: string }>(`/api/admin/users/${id}/reset-password`, {
+      method: "POST",
+      token,
+    }),
+  stats: (token: string) => request<AdminStats>("/api/admin/stats", { token }),
+  dataModel: (token: string) => request<DataModel>("/api/admin/data-model", { token }),
+  backup: (token: string) => requestFile("/api/admin/backup", token, { method: "POST" }),
+  // Off-site: the server uploads a gzipped full dump to object storage and returns a presigned link.
+  cloudBackup: (token: string) => request<CloudBackupResult>("/api/admin/backup/cloud", { method: "POST", token }),
+  restore: (token: string, file: File) => {
+    const form = new FormData();
+    form.append("confirm", "RESTORE");
+    form.append("file", file);
+    return requestUpload<{ ok: boolean; format: string; restoredFrom: string }>("/api/admin/restore", token, form);
+  },
 };

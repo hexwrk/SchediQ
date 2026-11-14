@@ -1,11 +1,12 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { cognitiveCategoryField, colorTagField, subjectNameField } from "../lib/validators";
 
 const subjectSchema = z.object({
-  name: z.string().min(1),
-  cognitiveCategory: z.string().min(1),
-  colorTag: z.string().min(1).optional(),
+  name: subjectNameField,
+  cognitiveCategory: cognitiveCategoryField,
+  colorTag: colorTagField.optional(),
 });
 
 export async function listSubjects(req: Request, res: Response) {

@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { aiEnabled, logAiFailure, openAiClient } from "../lib/openai";
+import { aiUsageFor } from "../lib/tier";
 
 // AI task parser. The AI is used STRICTLY for parsing free text into structured
 // fields; it never schedules. Two paths:
@@ -8,11 +10,13 @@ import { prisma } from "../lib/prisma";
 //   - openai: OpenAI Structured Outputs, falling back to the rule parser on any
 //             failure so the endpoint can never hard-fail on the model.
 //
-// Which path runs is controlled by the AI_PARSER env var, read per-request so
-// flipping it needs no rebuild.
+// Which path runs is controlled by AI_PARSER (validated at boot, lib/env.ts).
+// Timeout, retry and failure logging live in lib/openai.ts.
 
 // Single place to change the model.
 const MODEL = "gpt-4o-mini";
+// The structured reply is ~100 tokens; the cap bounds cost if the model rambles.
+const MAX_OUTPUT_TOKENS = 300;
 
 // Cap input length defensively: bounds token cost and the regex work, and
 // limits prompt-injection surface.
@@ -22,7 +26,7 @@ const COGNITIVE_CATEGORIES = ["Analytical", "Verbal", "Technical", "General"] as
 type CognitiveCategory = (typeof COGNITIVE_CATEGORIES)[number];
 
 const bodySchema = z.object({
-  text: z.string().min(1),
+  text: z.string().trim().min(1, "Describe the task first."),
 });
 
 export interface ParsedTask {
@@ -42,6 +46,8 @@ interface UserSubject {
   name: string;
   cognitiveCategory: string;
 }
+
+const WEEKDAYS: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
 
 const MONTHS: Record<string, number> = {
   jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
@@ -78,6 +84,18 @@ function resolveDeadline(text: string, now: Date): string | null {
       candidate = new Date(year + 1, month, day, 23, 59, 0, 0);
     }
     return candidate.toISOString();
+  }
+
+  // Weekday names: "due Tuesday", "by fri", or even "dueTuesday" (no space).
+  // Resolves to the NEXT occurrence after today, end of day; a bare weekday
+  // that is today means next week's, since "today" has its own rule below.
+  m = lower.match(/(?:\b|due|by|on)(mon|tue|wed|thu|fri|sat|sun)(?:day|sday|nesday|rsday|urday|rs|s)?\b/);
+  if (m) {
+    const target = WEEKDAYS[m[1]];
+    let ahead = (target - now.getDay() + 7) % 7;
+    if (ahead === 0) ahead = 7;
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + ahead, 23, 59, 0, 0);
+    return d.toISOString();
   }
 
   // Relative words.
@@ -148,20 +166,26 @@ function matchSubject(text: string, subjects: UserSubject[]): UserSubject | null
 // cleanly, fall back to the trimmed input if stripping empties it.
 function deriveTitle(text: string): string {
   let t = text
-    .replace(/\bdue\b.*$/i, "")
+    // "due ..." to the end is deadline noise; also when glued to the next
+    // word ("dueTuesday", "due15 Aug").
+    .replace(/\bdue(?:\b|(?=\d)|(?=(?:mon|tue|wed|thu|fri|sat|sun|tomorrow|today|next)))[\s\S]*$/i, "")
     .replace(/\bby\b\s+\d.*$/i, "")
     .replace(/\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m)\b/gi, "")
     .replace(/\b(urgent|asap|whenever|no rush|next week|tomorrow|tonight|today)\b/gi, "")
+    // Separators left behind by removed words: "ASR homework, , " -> "ASR homework".
+    .replace(/\s*,(\s*,)+/g, ",")
     .replace(/\s{2,}/g, " ")
     .replace(/[\s,.;:-]+$/g, "")
+    // A preposition left dangling by a removed duration: "Study X for".
+    .replace(/\s+(?:for|about|around)$/i, "")
     .trim();
   if (!t) t = text.trim();
   // Capitalise first letter for presentation.
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
-// The deterministic rule-based parser. Always succeeds.
-function ruleParse(
+// The deterministic rule-based parser. Always succeeds. Exported for tests.
+export function ruleParse(
   text: string,
   subjects: UserSubject[],
   now: Date,
@@ -196,9 +220,7 @@ async function openAiParse(
   subjects: UserSubject[],
   now: Date
 ): Promise<ParsedTask> {
-  // Imported lazily so the package is only loaded when actually used.
-  const OpenAI = (await import("openai")).default;
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const client = await openAiClient();
 
   const subjectNames = subjects.map((s) => s.name);
 
@@ -221,6 +243,7 @@ async function openAiParse(
   const completion = await client.chat.completions.create({
     model: MODEL,
     temperature: 0,
+    max_completion_tokens: MAX_OUTPUT_TOKENS,
     messages: [
       { role: "system", content: system },
       { role: "user", content: text },
@@ -283,22 +306,40 @@ export async function parseTask(req: Request, res: Response) {
   const { text } = bodySchema.parse(req.body);
   const clipped = text.slice(0, MAX_INPUT);
   const now = new Date();
+  const userId = req.userId as string;
+
+  // Tier gate: dormant while TIER_LIMITS_ENABLED is false (limit is always
+  // null, so every account parses without a daily cap). With it on, FREE gets
+  // a fixed number of parses per day and a 402 UPGRADE_REQUIRED. Count-then-insert is not atomic, so two parallel
+  // requests at the boundary could both pass; acceptable for a demo cap, a real
+  // billing limit would use a row lock or a counter with a CHECK constraint.
+  const account = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { accountType: true },
+  });
+  const usage = await aiUsageFor(userId, account?.accountType ?? "FREE", now);
+  if (usage.limit !== null && usage.used >= usage.limit) {
+    return res.status(402).json({
+      error: `Free plan limit reached: ${usage.limit} AI parses per day. Upgrade to Premium for unlimited parsing.`,
+      code: "UPGRADE_REQUIRED",
+      usage,
+    });
+  }
+  await prisma.aiParseLog.create({ data: { userId } });
 
   const subjects = await prisma.subject.findMany({
-    where: { userId: req.userId },
+    where: { userId },
     select: { id: true, name: true, cognitiveCategory: true },
   });
 
-  const mode = process.env.AI_PARSER ?? "rule";
-
-  if (mode === "openai" && process.env.OPENAI_API_KEY) {
+  if (aiEnabled()) {
     try {
       const result = await openAiParse(clipped, subjects, now);
       return res.json(result);
     } catch (err) {
       // On ANY failure (network, quota, bad JSON, schema) fall back to the rule
       // parser and label the source so the client knows the AI path degraded.
-      console.error("OpenAI parse failed, falling back to rule parser:", err);
+      logAiFailure("task parse", err);
       return res.json(ruleParse(clipped, subjects, now, "fallback"));
     }
   }

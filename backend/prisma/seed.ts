@@ -1,126 +1,59 @@
 import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
-import { buildSchedule, SchedulerTask, SchedulerPrefs } from "../src/lib/scheduler";
+import { validatePassword } from "../../shared/validation";
 
-// Seed a populated, lived-in demo account so the app looks real on first login.
-// Idempotent: re-running wipes and rebuilds the demo user's data, so the demo
-// always starts from a known state.
+// Seed: creates (or resets) the single super-admin account and nothing else.
+// No demo students, classmates, tasks or courses are created, so a fresh
+// install starts empty and every user goes through first-run onboarding.
+// Idempotent: re-running only resets the admin's password/role/tier; it never
+// touches any other account.
 const prisma = new PrismaClient();
 
-const DEMO_EMAIL = "demo@schediq.app";
-const DEMO_PASSWORD = "demo1234";
+// Operator account for the admin module. "admin" is on the reserved-username
+// list, so no one can register it; only this seed assigns it.
+const ADMIN_EMAIL = "admin@schediq.app";
+const ADMIN_USERNAME = "admin";
+// Local/demo default only. Production must pass SEED_ADMIN_PASSWORD, so a
+// deployed admin is never protected by a password published in the repo.
+// Meets the shared password rules (it must, or the admin could not change it
+// back to itself), and deliberately does not contain "admin".
+const LOCAL_DEFAULT_PASSWORD = "Study-Plan-2026!";
+
+function adminPassword(): string {
+  const fromEnv = process.env.SEED_ADMIN_PASSWORD?.trim();
+  if (fromEnv) {
+    const problem = validatePassword(fromEnv, { username: ADMIN_USERNAME, email: ADMIN_EMAIL });
+    if (problem) throw new Error(`SEED_ADMIN_PASSWORD rejected: ${problem}`);
+    return fromEnv;
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "SEED_ADMIN_PASSWORD is required in production. Run: SEED_ADMIN_PASSWORD='<strong password>' npx prisma db seed"
+    );
+  }
+  return LOCAL_DEFAULT_PASSWORD;
+}
 
 async function main() {
-  const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 12);
-
-  // Upsert the demo user (cascade deletes clear old subjects/tasks/sessions on
-  // the full reset below).
-  const user = await prisma.user.upsert({
-    where: { email: DEMO_EMAIL },
-    update: { passwordHash, name: "Demo Student" },
-    create: { email: DEMO_EMAIL, passwordHash, name: "Demo Student" },
+  const password = adminPassword();
+  const passwordHash = await bcrypt.hash(password, 12);
+  // PREMIUM so the admin never trips the FREE tier gates while testing.
+  const data = { passwordHash, username: ADMIN_USERNAME, name: "System Admin", role: "SUPER_ADMIN" as const, accountType: "PREMIUM" as const, mustChangePassword: false };
+  await prisma.user.upsert({
+    where: { email: ADMIN_EMAIL },
+    update: data,
+    create: { email: ADMIN_EMAIL, ...data },
   });
-
-  // Clean slate for the demo user so the seed is repeatable.
-  await prisma.studySession.deleteMany({ where: { task: { userId: user.id } } });
-  await prisma.task.deleteMany({ where: { userId: user.id } });
-  await prisma.subject.deleteMany({ where: { userId: user.id } });
-
-  // Four subjects across distinct cognitive categories and colours.
-  const subjectSpecs = [
-    { name: "Networking", cognitiveCategory: "Analytical", colorTag: "#3454D1" },
-    { name: "Maths", cognitiveCategory: "Analytical", colorTag: "#0E9E7E" },
-    { name: "English", cognitiveCategory: "Verbal", colorTag: "#D98324" },
-    { name: "Databases", cognitiveCategory: "Technical", colorTag: "#6B52E0" },
-  ];
-
-  const subjects: Record<string, { id: string; cognitiveCategory: string }> = {};
-  for (const spec of subjectSpecs) {
-    const s = await prisma.subject.create({ data: { ...spec, userId: user.id } });
-    subjects[spec.name] = { id: s.id, cognitiveCategory: s.cognitiveCategory };
-  }
-
-  const now = new Date();
-  const inDays = (n: number, h = 23, m = 59) =>
-    new Date(now.getFullYear(), now.getMonth(), now.getDate() + n, h, m, 0, 0);
-
-  // Four realistic tasks with varied deadlines/priorities/durations.
-  const taskSpecs = [
-    { title: "Subnetting practice set", subject: "Networking", deadline: inDays(2), durationMin: 120, priority: "HIGH" as const },
-    { title: "Calculus problem sheet 4", subject: "Maths", deadline: inDays(3), durationMin: 90, priority: "MEDIUM" as const },
-    { title: "Essay: comparative analysis", subject: "English", deadline: inDays(4), durationMin: 150, priority: "MEDIUM" as const },
-    { title: "SQL joins + normalization revision", subject: "Databases", deadline: inDays(5), durationMin: 100, priority: "HIGH" as const },
-  ];
-
-  const createdTasks = [];
-  for (const spec of taskSpecs) {
-    const t = await prisma.task.create({
-      data: {
-        title: spec.title,
-        deadline: spec.deadline,
-        durationMin: spec.durationMin,
-        priority: spec.priority,
-        subjectId: subjects[spec.subject].id,
-        userId: user.id,
-      },
-    });
-    createdTasks.push(t);
-  }
-
-  // Default preferences for the demo user.
-  const preference = await prisma.preference.upsert({
-    where: { userId: user.id },
-    update: {},
-    create: { userId: user.id },
-  });
-
-  // Generate the initial schedule using the real scheduler, so login lands on a
-  // populated calendar. Load tasks with subject so clustering/penalty apply.
-  const tasksWithSubject = await prisma.task.findMany({
-    where: { userId: user.id },
-    include: { subject: true },
-  });
-
-  const prefs: SchedulerPrefs = {
-    maxDailyMins: preference.maxDailyMins,
-    preferredStart: preference.preferredStart,
-    preferredEnd: preference.preferredEnd,
-    breakMins: preference.breakMins,
-    clustering: preference.clustering,
-  };
-
-  const planned = buildSchedule(
-    tasksWithSubject as unknown as SchedulerTask[],
-    prefs,
-    { now }
-  );
-
-  if (planned.length > 0) {
-    await prisma.studySession.createMany({
-      data: planned.map((p) => ({
-        taskId: p.taskId,
-        startsAt: p.startsAt,
-        endsAt: p.endsAt,
-      })),
-    });
-    const scheduledIds = Array.from(new Set(planned.map((p) => p.taskId)));
-    await prisma.task.updateMany({
-      where: { id: { in: scheduledIds } },
-      data: { status: "SCHEDULED" },
-    });
-  }
-
-  console.log(
-    `Seeded demo user ${DEMO_EMAIL} (password ${DEMO_PASSWORD}) with ` +
-      `${subjectSpecs.length} subjects, ${taskSpecs.length} tasks, ${planned.length} sessions.`
-  );
+  // The password is only echoed when it is the published local default.
+  const shown = password === LOCAL_DEFAULT_PASSWORD ? `password ${LOCAL_DEFAULT_PASSWORD}` : "password from SEED_ADMIN_PASSWORD";
+  console.log(`Seeded super admin ${ADMIN_EMAIL} (${shown}, SUPER_ADMIN, PREMIUM). No demo data.`);
 }
 
 main()
   .then(() => prisma.$disconnect())
   .catch(async (err) => {
-    console.error(err);
+    console.error(err instanceof Error ? err.message : err);
     await prisma.$disconnect();
     process.exit(1);
   });

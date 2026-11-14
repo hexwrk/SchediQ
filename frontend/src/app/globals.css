@@ -1,32 +1,73 @@
 @import "tailwindcss";
 
-/* SchediQ design system — matches the preferred HTML demo.
-   Off-white app background, white surfaces, soft borders, 12px radius.
-   Light-only by design: the demo has no dark mode, so we pin a light palette
-   and do not react to prefers-color-scheme (avoids washed-out surfaces). */
+/* SchediQ design system. Off-white app background, white surfaces, soft
+   borders, 12px radius.
+
+   Theming: every colour is a token below. <html data-theme="light|dark"> is set
+   before first paint by the inline script in app/layout.tsx (from the saved
+   choice, or the OS setting when the choice is "system"), so components only
+   ever reference tokens and never need dark: variants.
+
+   Contrast: every text token is >= 4.5:1 on --surface and --bg, on its own
+   10-15% tint (badges), and --on-solid is >= 4.5:1 on every solid fill. Input
+   borders (--input) are >= 3:1 against the surface (WCAG non-text contrast).
+   Decorative --border lines are intentionally softer. */
 :root {
   --bg: #f7f8fa;
   --surface: #ffffff;
   --border: #e6e8ec;
+  --input: #8a919d;
   --text: #1a1d23;
-  --text-muted: #6b7280;
+  --text-muted: #5f6673;
   --primary: #3454d1;
-  --accent: #0e9e7e;
-  --amber: #d98324;
+  --accent: #0b7a61;
+  --amber: #9a4a08;
   --violet: #6b52e0;
+  /* Text/icons on solid brand fills (buttons, badges, the SQ logo). */
+  --on-solid: #ffffff;
   --radius: 12px;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0f1115;
+  --surface: #181b22;
+  --border: #2c313c;
+  --input: #687083;
+  --text: #e8eaef;
+  --text-muted: #a3abba;
+  /* Lighter brand tones: legible as text on the dark surface, and dark
+     --on-solid text on them as fills. */
+  --primary: #8fa3ff;
+  --accent: #3fd0a4;
+  --amber: #f2a54a;
+  --violet: #b4a3ff;
+  --on-solid: #0f1115;
+  /* Tailwind's red scale is used for errors and destructive actions; remap it
+     so tints stay dark and text stays light. */
+  --color-red-50: #2a1416;
+  --color-red-100: #3b1a1d;
+  --color-red-200: #5a2328;
+  --color-red-300: #7a2c33;
+  --color-red-500: #f87171;
+  --color-red-600: #f87171;
+  --color-red-700: #fca5a5;
+  /* Native controls (date pickers, selects, scrollbars) follow the theme. */
+  color-scheme: dark;
 }
 
 @theme inline {
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-border: var(--border);
+  --color-input: var(--input);
   --color-text: var(--text);
   --color-text-muted: var(--text-muted);
   --color-primary: var(--primary);
   --color-accent: var(--accent);
   --color-amber: var(--amber);
   --color-violet: var(--violet);
+  --color-on-solid: var(--on-solid);
   --font-sans: var(--font-inter);
   --radius-card: var(--radius);
 }
@@ -41,4 +82,58 @@ body {
   color: var(--text);
   font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Progress-bar fill in a SUBJECT colour (set per bar as --fill). Raw subject
+   swatches are as low as 2.7:1 against the bar track, so the fill is darkened
+   in light mode and lightened in dark mode by the smallest amount that takes
+   every swatch to >= 4.5:1 against the track while keeping its hue. */
+.subject-fill {
+  background: color-mix(in srgb, var(--fill) 75%, #000000);
+}
+:root[data-theme="dark"] .subject-fill {
+  background: color-mix(in srgb, var(--fill) 80%, #ffffff);
+}
+
+/* Print: reports render as plain light documents on white paper, whatever
+   theme is on screen (dark ink-on-black pages would be unreadable and waste
+   toner). Re-declares the light palette over the dark one. */
+@media print {
+  :root,
+  :root[data-theme="dark"] {
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --border: #e6e8ec;
+    --input: #8a919d;
+    --text: #1a1d23;
+    --text-muted: #5f6673;
+    --primary: #3454d1;
+    --accent: #0b7a61;
+    --amber: #9a4a08;
+    --violet: #6b52e0;
+    --on-solid: #ffffff;
+    --color-red-50: #fef2f2;
+    --color-red-100: #fee2e2;
+    --color-red-200: #fecaca;
+    --color-red-300: #fca5a5;
+    --color-red-500: #ef4444;
+    --color-red-600: #dc2626;
+    --color-red-700: #b91c1c;
+    color-scheme: light;
+  }
+  body {
+    background: #ffffff;
+  }
+  :root[data-theme="dark"] .subject-fill {
+    background: color-mix(in srgb, var(--fill) 75%, #000000);
+  }
+  /* Browsers drop background colours when printing by default, which would
+     print empty chart bars and progress tracks. Keep them. */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  @page {
+    margin: 16mm;
+  }
 }

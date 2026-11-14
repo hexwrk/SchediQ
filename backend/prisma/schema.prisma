@@ -2,21 +2,107 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// DATABASE_URL: the URL the running API uses. On Neon this is the POOLED
+// string (host contains "-pooler"), ?sslmode=require.
+// DIRECT_URL: the direct (non-pooled) string, used only by Prisma Migrate
+// (`prisma migrate deploy`), which needs a session-level connection that a
+// transaction-mode pooler cannot provide. Locally both point at the same DB.
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
+  // Public handle, 3-20 chars [a-z0-9_] starting with a letter, stored
+  // normalised (trimmed, lower-case). Login stays by email.
+  username     String   @unique
   passwordHash String
-  name         String?
+  name         String
   createdAt    DateTime @default(now())
+  // Authorization role. Checked server-side on every admin request (loaded from
+  // the DB, never trusted from the JWT) so a demotion takes effect immediately.
+  role         Role        @default(USER)
+  // Demo subscription tier. No billing: flipped via PATCH /api/account/tier.
+  accountType  AccountType @default(FREE)
+  // Set when an admin issues a temporary password; the app asks the user to
+  // choose a new one, and changing it clears the flag.
+  mustChangePassword Boolean @default(false)
+  // Embedded in every JWT as "tv". Incrementing it revokes every token issued
+  // before (password change, reset link used, admin temporary password), since
+  // requireAuth rejects a token whose tv no longer matches.
+  tokenVersion Int @default(0)
 
   subjects     Subject[]
   tasks        Task[]
   preferences  Preference?
+  aiParses     AiParseLog[]
+  courses      Course[]
+  resetTokens  PasswordResetToken[]
+}
+
+// Forgot-password tokens. Only a SHA-256 hash of the token is stored, so a
+// leaked database row cannot be replayed as a reset link. Single use (usedAt)
+// and short-lived (expiresAt).
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+enum Role {
+  USER
+  SUPER_ADMIN
+}
+
+enum AccountType {
+  FREE
+  PREMIUM
+}
+
+// One row per AI parse request. The FREE tier is capped per calendar day, so the
+// gate counts today's rows for the user rather than storing a mutable counter.
+model AiParseLog {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+// Audit trail for admin backup/restore actions; the System page shows the
+// latest BACKUP timestamp from here. actorEmail is denormalised on purpose so
+// the entry survives the actor's account being deleted.
+model BackupLog {
+  id         String   @id @default(uuid())
+  createdAt  DateTime @default(now())
+  kind       String   // "BACKUP" | "RESTORE"
+  format     String   // "sql" | "json"
+  filename   String
+  sizeBytes  Int
+  actorEmail String
+  // "local" (downloaded to the admin's browser) | "s3" (uploaded to
+  // S3-compatible object storage). "drive" rows are from the retired Google
+  // Drive uploader. Existing rows are local.
+  destination String  @default("local")
+  // Set for s3 backups: the object key inside S3_BUCKET.
+  objectKey   String?
+  // Legacy: set only on old Drive backups.
+  driveFileId String?
+  driveLink   String?
+
+  @@index([kind, destination, createdAt])
 }
 
 // cognitive_category drives the clustering penalty in the scheduler (Sprint 3).
@@ -32,6 +118,7 @@ model Subject {
   user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   tasks    Task[]
+  courses  Course[]
 
   @@unique([userId, name])
 }
@@ -45,6 +132,8 @@ enum TaskPriority {
 enum TaskStatus {
   PENDING
   SCHEDULED
+  // At least one of the task's study sessions is complete, but not all.
+  IN_PROGRESS
   DONE
 }
 
@@ -64,6 +153,11 @@ model Task {
   subjectId String?
   subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
 
+  // Set when the task was created by "Add this course to my schedule": one task
+  // per lesson. This is the link between the course generator and the planner.
+  lessonId  String?  @unique
+  lesson    Lesson?  @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+
   sessions  StudySession[]
 }
 
@@ -72,6 +166,9 @@ model StudySession {
   id        String   @id @default(uuid())
   startsAt  DateTime
   endsAt    DateTime
+  // Completion lives on the session (Sprint 3 gamification). Null = not done.
+  // XP/streak derive from these timestamps; task.status is kept roughly in sync.
+  completedAt DateTime?
   createdAt DateTime @default(now())
 
   taskId String
@@ -88,4 +185,60 @@ model Preference {
 
   userId String @unique
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum CourseSource {
+  AI   // generated by OpenAI Structured Outputs
+  SEED // built offline from the bundled topic templates (no network)
+}
+
+// AI course generator (DataCamp-style). A course belongs to one user and owns
+// an ordered list of lessons. XP for lessons/quizzes/courses is DERIVED from the
+// lesson rows below (completedAt, quizScore, quizPassedAt), never stored.
+model Course {
+  id          String       @id @default(uuid())
+  title       String
+  topic       String
+  level       String       // "BEGINNER" | "INTERMEDIATE" | "ADVANCED"
+  description String
+  source      CourseSource
+  createdAt   DateTime     @default(now())
+  // Set once "Add this course to my schedule" has created its tasks, so the
+  // button cannot duplicate them.
+  scheduledAt DateTime?
+
+  userId  String
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Optional roll-up into one of the user's subjects. Lessons and quizzes in a
+  // linked course feed that subject's mastery score.
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+
+  lessons Lesson[]
+
+  @@index([userId])
+}
+
+model Lesson {
+  id        String   @id @default(uuid())
+  order     Int
+  title     String
+  content   String   @db.Text
+  keyPoints String[]
+  // [{ question, options: string[], answerIndex }]. answerIndex is stripped
+  // from API responses until the quiz is submitted, so it cannot be read early.
+  quiz      Json
+  completedAt  DateTime?
+  // Best score so far, 0-100.
+  quizScore    Int?
+  // First time the quiz was passed (>= pass mark); dates the quiz XP event.
+  quizPassedAt DateTime?
+
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  task     Task?
+
+  @@unique([courseId, order])
 }

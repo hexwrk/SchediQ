@@ -25,6 +25,31 @@ const PRIORITY_RANK: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
 // pathological input (e.g. a zero-capacity day) can never infinite-loop.
 const MAX_ITERATIONS = 100000;
 
+// Planning horizon: the scheduler never places blocks more than this many days
+// ahead of `now`. It bounds the work for very large task lists (the day loop
+// can never run away) and keeps the calendar meaningful. Minutes that do not
+// fit inside the horizon are NOT dropped silently: they are reported as an
+// UNSCHEDULED issue (see scheduleIssues) so the UI can say why.
+export const HORIZON_DAYS = 60;
+
+// Distribution rules (the "spread, don't front-load" behaviour).
+//
+// MAX_FOCUS_MIN: longest single block. A task's time on one day is merged into
+// ONE block, unless it exceeds this, in which case it is split into equal
+// blocks of at most this length with a normal break between them.
+export const MAX_FOCUS_MIN = 90;
+// MIN_DAILY_SHARE_MIN: the smallest per-day share a task is spread into. A task
+// is spread over at most floor(minutes / this) days, so a 60-min task stays one
+// block instead of becoming 7 slivers of 9 minutes across a week.
+export const MIN_DAILY_SHARE_MIN = 45;
+// MIN_FRAGMENT_MIN: never create a block shorter than this just because a day
+// has a few minutes of capacity left (unless that finishes the task).
+export const MIN_FRAGMENT_MIN = 15;
+// MAX_LESSONS_PER_DAY: course lessons are paced, at most this many lessons of
+// the same course on one day, so "add course to schedule" spreads a course over
+// several days instead of stacking every lesson on the first one.
+export const MAX_LESSONS_PER_DAY = 1;
+
 export type Priority = "LOW" | "MEDIUM" | "HIGH";
 
 export interface SchedulerTask {
@@ -36,6 +61,9 @@ export interface SchedulerTask {
   // Only the cognitive category matters for scheduling; colorTag is display-only.
   subject: { cognitiveCategory: string } | null;
   status: string;
+  // Set for tasks created from a course lesson ("add course to schedule").
+  // Lessons are paced per course (MAX_LESSONS_PER_DAY) instead of spread.
+  courseId?: string | null;
 }
 
 export interface SchedulerPrefs {
@@ -46,10 +74,25 @@ export interface SchedulerPrefs {
   clustering: boolean;
 }
 
+// Mirrors the Preference model's @default values: what a user with no saved
+// preferences is scheduled with.
+export const DEFAULT_PREFS: SchedulerPrefs = {
+  maxDailyMins: 180,
+  preferredStart: "09:00",
+  preferredEnd: "21:00",
+  breakMins: 10,
+  clustering: true,
+};
+
 export interface SchedulerOpts {
   // Reference "now". Day packing starts on this calendar day. Supplied by the
   // caller (the controller passes new Date()) so the function stays pure.
   now?: Date;
+  // Blocks that already occupy time and are kept across regenerates (the
+  // completed sessions). New blocks on that day start after the latest busy
+  // block ends, and busy minutes count toward that day's maxDailyMins, so a
+  // block finished early can never be overlapped by the new plan.
+  busy?: { startsAt: Date | string; endsAt: Date | string }[];
 }
 
 export interface PlannedSession {
@@ -89,9 +132,11 @@ export function buildSchedule(
 ): PlannedSession[] {
   const now = opts.now ?? new Date();
 
-  // Rule 1: only PENDING or SCHEDULED tasks are placed; DONE tasks are skipped.
+  // Rule 1: only unfinished tasks are placed (PENDING, SCHEDULED, IN_PROGRESS);
+  // DONE tasks are skipped. For IN_PROGRESS the caller passes the REMAINING
+  // minutes as durationMin.
   const schedulable = tasks.filter(
-    (t) => t.status === "PENDING" || t.status === "SCHEDULED"
+    (t) => t.status === "PENDING" || t.status === "SCHEDULED" || t.status === "IN_PROGRESS"
   );
 
   // Rule 2: stable sort by deadline asc, then priority desc, then id asc.
@@ -106,110 +151,187 @@ export function buildSchedule(
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 
-  // Rule 3: optional clustering. Group same-subject tasks so they are placed
-  // consecutively. Within a group we preserve the sorted order; groups are
-  // ordered by the position of each group's earliest (first-seen) task, which
-  // keeps the overall deadline/priority ordering stable and deterministic.
-  const ordered = prefs.clustering ? clusterBySubject(sorted) : sorted;
-
   // Daily window in minutes-since-midnight. maxDailyMins caps actual task time;
   // breaks do not count against it but must still fit inside the window.
   const windowStart = parseHHMM(prefs.preferredStart);
   const windowEnd = parseHHMM(prefs.preferredEnd);
-  const windowMins = Math.max(0, windowEnd - windowStart);
   const dailyTaskCap = Math.max(0, prefs.maxDailyMins);
-
-  const sessions: PlannedSession[] = [];
-
-  // Mutable day cursor, anchored to today's calendar date (local).
-  let dayYear = now.getFullYear();
-  let dayMonth = now.getMonth();
-  let dayDate = now.getDate();
-
-  // Per-day running state.
-  let taskMinsUsedToday = 0;      // counts toward maxDailyMins
-  let cursorMin = windowStart;    // next free minute-of-day inside the window
-  let lastCategoryToday: string | null = null; // for the switch penalty
-
-  let iterations = 0;
-
-  // advanceDay: reset per-day counters and move the calendar cursor forward one
-  // local day. Using Date arithmetic handles month/year rollover correctly.
-  const advanceDay = () => {
-    const d = new Date(dayYear, dayMonth, dayDate + 1, 0, 0, 0, 0);
-    dayYear = d.getFullYear();
-    dayMonth = d.getMonth();
-    dayDate = d.getDate();
-    taskMinsUsedToday = 0;
-    cursorMin = windowStart;
-    lastCategoryToday = null;
-  };
-
-  // If the window or the daily cap is zero there is no capacity anywhere; bail
-  // rather than spin (the iteration cap would also catch this).
-  if (windowMins <= 0 || dailyTaskCap <= 0) {
-    return sessions;
+  if (windowEnd - windowStart <= 0 || dailyTaskCap <= 0) {
+    // No capacity anywhere: nothing is placed, and scheduleIssues reports every
+    // task as UNSCHEDULED with the reason (never a silent drop).
+    return [];
   }
 
-  for (const task of ordered) {
+  // ---- Day model: day 0 = today (local), up to HORIZON_DAYS days.
+  // Today only: never place a block in the past. Start at the later of the
+  // window start and "now" rounded UP to the next 5 minutes. A task whose
+  // deadline has already passed is therefore placed as soon as possible from
+  // here, not back-dated (it is flagged OVERDUE by scheduleIssues).
+  const nowMin =
+    now.getHours() * 60 + now.getMinutes() + (now.getSeconds() > 0 || now.getMilliseconds() > 0 ? 1 : 0);
+  const dayStartMin = (d: number) => (d === 0 ? Math.max(windowStart, Math.ceil(nowMin / 5) * 5) : windowStart);
+  const dayDate = (d: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + d);
+
+  // Worst-case break in front of any block (the switch-penalty break). Window
+  // time for it is RESERVED at allocation, so the layout pass below can never
+  // run past the end of the window whatever order blocks end up in.
+  const maxBreak = Math.max(prefs.breakMins, Math.round(prefs.breakMins * SWITCH_PENALTY));
+  const blocksFor = (m: number) => Math.ceil(m / MAX_FOCUS_MIN);
+
+  const taskUsed: number[] = new Array(HORIZON_DAYS).fill(0); // vs maxDailyMins
+  // Effective start minute per day: after "now" (today) and after any busy block.
+  const startMin: number[] = Array.from({ length: HORIZON_DAYS }, (_, d) => dayStartMin(d));
+  for (const b of opts.busy ?? []) {
+    const start = new Date(b.startsAt);
+    const end = new Date(b.endsAt);
+    const d = Math.round(
+      (new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime() - dayDate(0).getTime()) / 86400000
+    );
+    if (d < 0 || d >= HORIZON_DAYS) continue;
+    taskUsed[d] += Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
+    // + the break that must follow it before the next block.
+    startMin[d] = Math.max(startMin[d], end.getHours() * 60 + end.getMinutes() + prefs.breakMins);
+  }
+  const windowFree: number[] = Array.from({ length: HORIZON_DAYS }, (_, d) => Math.max(0, windowEnd - startMin[d]));
+  // Allocation result: per day, the ordered list of (task, minutes).
+  const perDay: { task: SchedulerTask; minutes: number }[][] = Array.from({ length: HORIZON_DAYS }, () => []);
+  // Lessons already placed per course per day (pacing).
+  const lessonsOn = new Map<string, number>();
+
+  let iterations = 0;
+  const guard = () => ++iterations > MAX_ITERATIONS;
+
+  // Largest amount of `want` minutes that fits on day d (daily cap AND window,
+  // including the break reserved before each resulting block).
+  const fitOn = (d: number, want: number): number => {
+    let m = Math.min(want, dailyTaskCap - taskUsed[d], windowFree[d]);
+    while (m > 0 && m + blocksFor(m) * maxBreak > windowFree[d]) {
+      m -= m + blocksFor(m) * maxBreak - windowFree[d];
+    }
+    return Math.max(0, m);
+  };
+  const place = (d: number, task: SchedulerTask, m: number) => {
+    perDay[d].push({ task, minutes: m });
+    taskUsed[d] += m;
+    windowFree[d] -= m + blocksFor(m) * maxBreak;
+  };
+  // A placement smaller than MIN_FRAGMENT_MIN is skipped unless it finishes the task.
+  const worthPlacing = (m: number, remaining: number) => m >= MIN_FRAGMENT_MIN || (m > 0 && m === remaining);
+
+  // Local day index of an instant relative to today (negative = already past).
+  const todayMs = dayDate(0).getTime();
+  const dayIndexOf = (instant: Date) => {
+    const local = new Date(instant.getFullYear(), instant.getMonth(), instant.getDate());
+    // Round, not floor: a DST shift makes some "days" 23 or 25 hours long.
+    return Math.round((local.getTime() - todayMs) / 86400000);
+  };
+
+  // ---- Phase 1: allocate minutes to days, one task at a time.
+  for (const task of sorted) {
     let remaining = Math.max(0, task.durationMin);
-    const category = task.subject?.cognitiveCategory ?? "General";
+    if (remaining === 0) continue;
+    const lastDay = Math.min(HORIZON_DAYS - 1, dayIndexOf(new Date(task.deadline)));
 
-    // Rule 5: split a task across days until all its minutes are placed.
-    while (remaining > 0) {
-      if (++iterations > MAX_ITERATIONS) {
-        // Defensive cap: stop rather than loop forever on pathological input.
-        return sessions;
+    if (task.courseId) {
+      // Course lesson: deadlines are soft pacing targets, so the rule is "at
+      // most MAX_LESSONS_PER_DAY of this course per day". Place it whole on the
+      // earliest such day with room; lessons are short, so this is one block.
+      for (let d = 0; d < HORIZON_DAYS && remaining > 0; d++) {
+        if (guard()) return finish();
+        const key = `${task.courseId}|${d}`;
+        if ((lessonsOn.get(key) ?? 0) >= MAX_LESSONS_PER_DAY) continue;
+        const m = fitOn(d, remaining);
+        if (!worthPlacing(m, remaining)) continue;
+        place(d, task, m);
+        remaining -= m;
+        lessonsOn.set(key, (lessonsOn.get(key) ?? 0) + 1);
       }
+      continue;
+    }
 
-      // Rule 6: compute the break that must precede this block if something is
-      // already scheduled today. Same category -> plain break; different
-      // category -> widened by the switch penalty (rounded).
-      let breakMin = 0;
-      if (lastCategoryToday !== null) {
-        breakMin =
-          category !== lastCategoryToday
-            ? Math.round(prefs.breakMins * SWITCH_PENALTY)
-            : prefs.breakMins;
-      }
+    // Days up to and including the deadline day that still have room.
+    const before: number[] = [];
+    for (let d = 0; d <= lastDay; d++) {
+      if (fitOn(d, MIN_FRAGMENT_MIN) > 0 || fitOn(d, remaining) === remaining) before.push(d);
+    }
 
-      // Remaining task-time capacity for today (breaks excluded, per rule 4).
-      const capLeft = dailyTaskCap - taskMinsUsedToday;
-      // Remaining room inside the window after the break (breaks must fit here).
-      const windowLeft = windowEnd - (cursorMin + breakMin);
+    // (a) Spread evenly. Use at most floor(remaining / MIN_DAILY_SHARE_MIN)
+    // days (at least 1), picked evenly across the run-up to the deadline.
+    // Each visited day re-targets ceil(remaining / slots left), so a day that
+    // could not take its full share carries the shortfall forward.
+    const slots = Math.min(before.length, Math.max(1, Math.floor(remaining / MIN_DAILY_SHARE_MIN)));
+    const chosen = Array.from({ length: slots }, (_, i) => before[Math.floor((i * before.length) / slots)]);
+    for (let i = 0; i < chosen.length && remaining > 0; i++) {
+      if (guard()) return finish();
+      const target = Math.ceil(remaining / (chosen.length - i));
+      const m = fitOn(chosen[i], target);
+      if (!worthPlacing(m, remaining)) continue;
+      place(chosen[i], task, m);
+      remaining -= m;
+    }
 
-      // If neither a break nor even one minute of task fits today, roll over.
-      if (capLeft <= 0 || windowLeft <= 0) {
-        advanceDay();
-        continue;
-      }
+    // (b) Shortfall: any other day before the deadline with room, in order.
+    const chosenSet = new Set(chosen);
+    for (const d of before) {
+      if (remaining <= 0) break;
+      if (guard()) return finish();
+      if (chosenSet.has(d)) continue;
+      const m = fitOn(d, remaining);
+      if (!worthPlacing(m, remaining)) continue;
+      place(d, task, m);
+      remaining -= m;
+    }
 
-      // This block's length is bounded by: remaining task minutes, the daily
-      // task cap, and the window room left after the break.
-      const blockLen = Math.min(remaining, capLeft, windowLeft);
-      if (blockLen <= 0) {
-        advanceDay();
-        continue;
-      }
-
-      const blockStartMin = cursorMin + breakMin;
-      const blockEndMin = blockStartMin + blockLen;
-
-      sessions.push({
-        taskId: task.id,
-        startsAt: instantAt(dayYear, dayMonth, dayDate, blockStartMin),
-        endsAt: instantAt(dayYear, dayMonth, dayDate, blockEndMin),
-      });
-
-      // Advance per-day state.
-      cursorMin = blockEndMin;
-      taskMinsUsedToday += blockLen;
-      lastCategoryToday = category;
-      remaining -= blockLen;
+    // (c) Still not done: as early as possible AFTER the deadline (or from
+    // today when the deadline already passed). scheduleIssues flags the task
+    // AT_RISK / OVERDUE; minutes beyond the horizon are reported UNSCHEDULED.
+    for (let d = Math.max(0, lastDay + 1); d < HORIZON_DAYS && remaining > 0; d++) {
+      if (guard()) return finish();
+      const m = fitOn(d, remaining);
+      if (!worthPlacing(m, remaining)) continue;
+      place(d, task, m);
+      remaining -= m;
     }
   }
 
-  return sessions;
+  return finish();
+
+  // ---- Phase 2: lay each day out in time order.
+  function finish(): PlannedSession[] {
+    const sessions: PlannedSession[] = [];
+    for (let d = 0; d < HORIZON_DAYS; d++) {
+      if (perDay[d].length === 0) continue;
+      // Within a day, keep allocation order (deadline/priority), and with
+      // clustering on, group same-subject work so it runs back to back.
+      const order = prefs.clustering
+        ? clusterBySubject(perDay[d].map((p) => p.task)).map((t) => perDay[d].find((p) => p.task === t)!)
+        : perDay[d];
+      const date = dayDate(d);
+      let cursor = startMin[d];
+      let lastCategory: string | null = null;
+      for (const { task, minutes } of order) {
+        const category = task.subject?.cognitiveCategory ?? "General";
+        // ONE block per task per day, or equal blocks of <= MAX_FOCUS_MIN.
+        const n = blocksFor(minutes);
+        for (let b = 0; b < n; b++) {
+          const len = Math.floor(minutes / n) + (b < minutes % n ? 1 : 0);
+          // Switch penalty: a different cognitive category from the previous
+          // block widens the break by SWITCH_PENALTY.
+          const brk =
+            lastCategory === null ? 0 : category !== lastCategory ? Math.round(prefs.breakMins * SWITCH_PENALTY) : prefs.breakMins;
+          const start = cursor + brk;
+          sessions.push({
+            taskId: task.id,
+            startsAt: instantAt(date.getFullYear(), date.getMonth(), date.getDate(), start),
+            endsAt: instantAt(date.getFullYear(), date.getMonth(), date.getDate(), start + len),
+          });
+          cursor = start + len;
+          lastCategory = category;
+        }
+      }
+    }
+    return sessions;
+  }
 }
 
 // Group tasks by subjectId while preserving input order within each group and
@@ -234,4 +356,120 @@ function clusterBySubject(sorted: SchedulerTask[]): SchedulerTask[] {
     result.push(...groups.get(key)!);
   }
   return result;
+}
+
+// ---------- Schedule issues (never drop a task silently) ----------
+
+export type IssueKind = "OVERDUE" | "AT_RISK" | "UNSCHEDULED";
+
+export interface ScheduleIssue {
+  taskId: string;
+  title: string;
+  kind: IssueKind;
+  // Human-readable explanation shown on the dashboard.
+  reason: string;
+  // Minutes of the task that have no study block at all.
+  unplacedMin: number;
+  deadline: string;
+}
+
+export interface IssueTask {
+  id: string;
+  title: string;
+  deadline: Date | string;
+  durationMin: number;
+  status: string;
+  updatedAt?: Date | string;
+}
+
+export interface IssueSession {
+  taskId: string;
+  startsAt: Date | string;
+  endsAt: Date | string;
+  createdAt?: Date | string;
+}
+
+function fmtDay(d: Date): string {
+  return d.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" });
+}
+
+// PURE: derive per-task problems from the stored tasks + sessions. Runs on
+// every schedule load (not just on regenerate), so the reasons stay accurate
+// as time passes. One task can have several issues (e.g. OVERDUE and
+// UNSCHEDULED); the dashboard lists each with its reason.
+export function scheduleIssues(
+  tasks: IssueTask[],
+  sessions: IssueSession[],
+  prefs: SchedulerPrefs,
+  now: Date
+): ScheduleIssue[] {
+  const byTask = new Map<string, IssueSession[]>();
+  for (const s of sessions) {
+    const list = byTask.get(s.taskId) ?? [];
+    list.push(s);
+    byTask.set(s.taskId, list);
+  }
+  // When the plan was last generated: the newest planned session's createdAt.
+  // A task edited after that simply has not been scheduled YET.
+  const lastGenerated = sessions.reduce<number>(
+    (max, s) => (s.createdAt ? Math.max(max, new Date(s.createdAt).getTime()) : max),
+    0
+  );
+  const windowMins = Math.max(0, parseHHMM(prefs.preferredEnd) - parseHHMM(prefs.preferredStart));
+  const noCapacity = windowMins <= 0 || prefs.maxDailyMins <= 0;
+
+  const issues: ScheduleIssue[] = [];
+  // Stable order (deadline, then id) so the list does not jump between loads.
+  const ordered = [...tasks].sort(
+    (a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime() || (a.id < b.id ? -1 : 1)
+  );
+
+  for (const t of ordered) {
+    if (t.status === "DONE") continue;
+    const deadline = new Date(t.deadline);
+    const own = byTask.get(t.id) ?? [];
+    const placed = own.reduce(
+      (sum, s) => sum + Math.round((new Date(s.endsAt).getTime() - new Date(s.startsAt).getTime()) / 60000),
+      0
+    );
+    const unplaced = Math.max(0, t.durationMin - placed);
+    const base = { taskId: t.id, title: t.title, deadline: deadline.toISOString() };
+
+    if (deadline.getTime() < now.getTime()) {
+      issues.push({
+        ...base,
+        kind: "OVERDUE",
+        reason: `Deadline passed on ${fmtDay(deadline)}. It is scheduled as soon as possible instead of being dropped.`,
+        unplacedMin: unplaced,
+      });
+    }
+
+    if (unplaced > 0) {
+      let reason: string;
+      if (noCapacity) {
+        reason = "Your study window or daily limit is zero, so nothing can be placed. Fix it in Preferences.";
+      } else if (t.updatedAt && lastGenerated && new Date(t.updatedAt).getTime() > lastGenerated && placed === 0) {
+        reason = "Added or changed after the last schedule. Regenerate the schedule to place it.";
+      } else if (sessions.length === 0) {
+        reason = "No schedule generated yet. Click Regenerate schedule.";
+      } else {
+        reason = `${unplaced} min did not fit in the next ${HORIZON_DAYS} days at ${prefs.maxDailyMins} min/day (${prefs.preferredStart}-${prefs.preferredEnd}). Raise the daily limit or widen the window.`;
+      }
+      issues.push({ ...base, kind: "UNSCHEDULED", reason, unplacedMin: unplaced });
+    }
+
+    // Placed (at least partly) but finishing after the deadline.
+    if (deadline.getTime() >= now.getTime() && own.length > 0) {
+      const lastEnd = Math.max(...own.map((s) => new Date(s.endsAt).getTime()));
+      if (lastEnd > deadline.getTime()) {
+        issues.push({
+          ...base,
+          kind: "AT_RISK",
+          reason: `Its last study block ends ${fmtDay(new Date(lastEnd))}, after the ${fmtDay(deadline)} deadline. Raise the daily limit, raise its priority, or move the deadline.`,
+          unplacedMin: unplaced,
+        });
+      }
+    }
+  }
+  return issues;
 }
